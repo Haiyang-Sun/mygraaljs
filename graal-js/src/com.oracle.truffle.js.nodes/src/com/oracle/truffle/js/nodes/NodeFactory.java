@@ -1014,6 +1014,16 @@ public class NodeFactory {
             public Frame executeFrame(Frame f) {
                 return module.getEnvironment();
             }
+
+            @Override
+            public int getFrameLevel() {
+                return -2;
+            }
+
+            @Override
+            public int getScopeLevel() {
+                return -2;
+            }
         }
         return new JavaScriptNode() {
             private final JSModuleRecord module = moduleRecord;

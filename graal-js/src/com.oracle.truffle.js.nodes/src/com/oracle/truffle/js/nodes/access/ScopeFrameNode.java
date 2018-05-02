@@ -50,10 +50,12 @@ import com.oracle.truffle.api.frame.MaterializedFrame;
 import com.oracle.truffle.api.nodes.ExplodeLoop;
 import com.oracle.truffle.api.nodes.NodeCost;
 import com.oracle.truffle.api.nodes.NodeInfo;
+import com.oracle.truffle.api.object.DynamicObject;
 import com.oracle.truffle.js.nodes.JavaScriptBaseNode;
 import com.oracle.truffle.js.runtime.JSArguments;
 import com.oracle.truffle.js.runtime.JSContext;
 import com.oracle.truffle.js.runtime.JSFrameUtil;
+import com.oracle.truffle.js.runtime.objects.JSObject;
 import com.oracle.truffle.js.runtime.objects.Undefined;
 
 public abstract class ScopeFrameNode extends JavaScriptBaseNode {
@@ -67,6 +69,18 @@ public abstract class ScopeFrameNode extends JavaScriptBaseNode {
 
     public static ScopeFrameNode create(int frameLevel, int scopeLevel) {
         return create(frameLevel, scopeLevel, PARENT_SCOPE_SLOT);
+    }
+
+    public abstract int getFrameLevel();
+
+    public abstract int getScopeLevel();
+
+    public Object getFunction(Frame frame) {
+        Frame retFrame = frame;
+        for (int i = 0; i < getFrameLevel(); i++) {
+            retFrame = JSFrameUtil.castMaterializedFrame(JSArguments.getEnclosingFrame(retFrame.getArguments()));
+        }
+        return JSArguments.getFunctionObject(retFrame.getArguments());
     }
 
     public static ScopeFrameNode create(int frameLevel, int scopeLevel, FrameSlot parentSlot) {
@@ -101,6 +115,21 @@ public abstract class ScopeFrameNode extends JavaScriptBaseNode {
         public Frame executeFrame(Frame frame) {
             return frame;
         }
+
+        @Override
+        public int getFrameLevel() {
+            return 0;
+        }
+
+        @Override
+        public int getScopeLevel() {
+            return 0;
+        }
+
+        @Override
+        public Object getFunction(Frame frame) {
+            return JSArguments.getFunctionObject(frame.getArguments());
+        }
     }
 
     private static final class EnclosingScopeFrameNode extends ScopeFrameNode {
@@ -121,6 +150,16 @@ public abstract class ScopeFrameNode extends JavaScriptBaseNode {
                 retFrame = JSFrameUtil.castMaterializedFrame(FrameUtil.getObjectSafe(retFrame, parentSlot));
             }
             return retFrame;
+        }
+
+        @Override
+        public int getFrameLevel() {
+            return 0;
+        }
+
+        @Override
+        public int getScopeLevel() {
+            return this.scopeLevel;
         }
     }
 
@@ -147,12 +186,32 @@ public abstract class ScopeFrameNode extends JavaScriptBaseNode {
             }
             return retFrame;
         }
+
+        @Override
+        public int getFrameLevel() {
+            return this.frameLevel;
+        }
+
+        @Override
+        public int getScopeLevel() {
+            return this.scopeLevel;
+        }
     }
 
     private static final class EnclosingFunctionFrameNodeLevel1 extends ScopeFrameNode {
         @Override
         public Frame executeFrame(Frame frame) {
             return JSFrameUtil.castMaterializedFrame(JSArguments.getEnclosingFrame(frame.getArguments()));
+        }
+
+        @Override
+        public int getFrameLevel() {
+            return 1;
+        }
+
+        @Override
+        public int getScopeLevel() {
+            return 0;
         }
     }
 
@@ -173,6 +232,16 @@ public abstract class ScopeFrameNode extends JavaScriptBaseNode {
             }
             return retFrame;
         }
+
+        @Override
+        public int getFrameLevel() {
+            return this.frameLevel;
+        }
+
+        @Override
+        public int getScopeLevel() {
+            return 0;
+        }
     }
 
     private static final class GlobalScopeFrameNode extends ScopeFrameNode {
@@ -185,6 +254,16 @@ public abstract class ScopeFrameNode extends JavaScriptBaseNode {
         @Override
         public Frame executeFrame(Frame frame) {
             return context.getRealm().getGlobalScope();
+        }
+
+        @Override
+        public int getFrameLevel() {
+            return -1;
+        }
+
+        @Override
+        public int getScopeLevel() {
+            return -1;
         }
     }
 }

@@ -423,23 +423,30 @@ public abstract class JSFunctionCallNode extends JavaScriptNode implements JavaS
         protected MaterializedInvokeNode(JSTargetableNode functionTargetNode, AbstractFunctionArgumentsNode argumentsNode, byte flags) {
             super(flags);
             this.argumentsNode = argumentsNode;
-            this.functionTargetNode = createEventEmittingWrapper(functionTargetNode, functionTargetNode.getSourceSection());
+            SourceSection targetSourceSection = null;
+            if (functionTargetNode instanceof JSTargetableNode) {
+                targetSourceSection = ((JSTargetableNode) functionTargetNode).getTarget().getSourceSection();
+            }
+            if (targetSourceSection == null) {
+                targetSourceSection = functionTargetNode.getSourceSection();
+            }
+            this.functionTargetNode = createEventEmittingWrapper(functionTargetNode, functionTargetNode.getSourceSection(), targetSourceSection);
             this.targetNode = functionTargetNode.getTarget();
             transferSourceSection(functionTargetNode, this.targetNode);
             transferSourceSection(functionTargetNode, this.functionTargetNode);
         }
 
-        private JSTargetableNode createEventEmittingWrapper(JSTargetableNode functionTarget, SourceSection sourceSection) {
+        private JSTargetableNode createEventEmittingWrapper(JSTargetableNode functionTarget, SourceSection sourceSection, SourceSection tSection) {
             assert sourceSection != null;
             if (functionTarget instanceof WrapperNode) {
                 JSTargetableNode delegate = (JSTargetableNode) ((WrapperNode) functionTarget).getDelegateNode();
-                return createEventEmittingWrapper(delegate, sourceSection);
+                return createEventEmittingWrapper(delegate, sourceSection, tSection);
             } else if (functionTarget instanceof JSTaggedTargetableExecutionNode) {
                 JSTargetableNode delegate = ((JSTaggedTargetableExecutionNode) functionTarget).getChild();
-                return createEventEmittingWrapper(delegate, sourceSection);
+                return createEventEmittingWrapper(delegate, sourceSection, tSection);
             } else {
                 assert functionTarget instanceof PropertyNode || functionTarget instanceof ReadElementNode || functionTarget instanceof GlobalConstantNode;
-                return JSTaggedTargetableExecutionNode.createFor(functionTarget, sourceSection);
+                return JSTaggedTargetableExecutionNode.createFor(functionTarget, sourceSection, tSection);
             }
         }
 

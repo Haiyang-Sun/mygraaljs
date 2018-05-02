@@ -142,7 +142,7 @@ public abstract class FineGrainedAccessTest {
 
     protected Context context;
     private boolean collecting;
-    private ArrayList<Event> events;
+    protected ArrayList<Event> events;
     private Stack<JavaScriptNode> stack;
     private Instrumenter instrumenter;
     private TestingExecutionInstrument instrument;
@@ -170,6 +170,10 @@ public abstract class FineGrainedAccessTest {
             this.kind = kind;
             this.val = inputValue;
             this.instrumentedNode = instrumentedNode;
+        }
+
+        public String debug() {
+            return kind.name() + " " + val + " " + instrumentedNode.getClass().getSimpleName();
         }
 
         @Override
