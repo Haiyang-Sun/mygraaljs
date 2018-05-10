@@ -1169,14 +1169,31 @@ loop:
             functionExpression(true, topLevel || labelledStatement, singleStatement);
             return;
         case LET:
+            if (useBlockScope()) {
+                TokenType lookahead = lookaheadOfLetDeclaration(false);
+                if (lookahead != null) { // lookahead is let declaration
+                    if (singleStatement) {
+                        // ExpressionStatement should not have "let [" in its lookahead.
+                        // The IDENT check is not needed here - the only purpose of this
+                        // shortcut is to produce the same error mesage as Nashorn.
+                        if (lookahead == LBRACKET || T(k + 1) == IDENT) {
+                            throw error(AbstractParser.message("expected.stmt", "let declaration"), token);
+                        } // else break and call expressionStatement()
+                    } else {
+                        variableStatement(type);
+                        return;
+                    }
+                }
+            }
+            break;
         case CONST:
-            if (useBlockScope() && (type == LET && lookaheadIsLetDeclaration(false) || type == CONST)) {
+            if (useBlockScope()) {
                 if (singleStatement) {
-                    throw error(AbstractParser.message("expected.stmt", type.getName() + " declaration"), token);
+                    throw error(AbstractParser.message("expected.stmt", "const declaration"), token);
                 }
                 variableStatement(type);
                 return;
-            } else if (env.constAsVar && type == CONST) {
+            } else if (env.constAsVar) {
                 variableStatement(TokenType.VAR);
                 return;
             }
@@ -1783,6 +1800,9 @@ loop:
                     @Override
                     public void accept(IdentNode identNode) {
                         verifyStrictIdent(identNode, contextString);
+                        if (varType != VAR && identNode.getName().equals(LET.getName())) {
+                            throw error(AbstractParser.message("let.lexical.binding")); // ES8 13.3.1.1
+                        }
                         final VarNode var = new VarNode(varLine, varToken, sourceOrder, identNode.getFinish(), identNode.setIsDeclaredHere(), null, finalVarFlags);
                         appendStatement(var);
                     }
@@ -1822,10 +1842,10 @@ loop:
             if (!isDestructuring) {
                 assert init != null || varType != CONST || !isStatement;
                 final IdentNode ident = (IdentNode)binding;
+                if (varType != VAR && ident.getName().equals(LET.getName())) {
+                    throw error(AbstractParser.message("let.lexical.binding")); // ES8 13.3.1.1
+                }
                 if (!isStatement) {
-                    if (ident.getName().equals(LET.getName())) {
-                        throw error("let is not a valid binding name in a for loop"); // ES6 13.7.5.1
-                    }
                     if (init == null && varType == CONST) {
                         forResult.recordMissingAssignment(binding);
                     }
@@ -2300,6 +2320,10 @@ loop:
     }
 
     private boolean lookaheadIsLetDeclaration(boolean ofContextualKeyword) {
+        return lookaheadOfLetDeclaration(ofContextualKeyword) != null;
+    }
+
+    private TokenType lookaheadOfLetDeclaration(boolean ofContextualKeyword) {
         assert type == LET;
         for (int i = 1;; i++) {
             TokenType t = T(k + i);
@@ -2309,19 +2333,19 @@ loop:
                 continue;
             case OF:
                 if (ofContextualKeyword && ES6_FOR_OF) {
-                    return false;
+                    return null;
                 }
                 // fall through
             case IDENT:
             case LBRACKET:
             case LBRACE:
-                return true;
+                return t;
             default:
                 // accept future strict tokens in non-strict mode (including LET)
                 if (t.isContextualKeyword() || (!isStrictMode && t.isFutureStrict())) {
-                    return true;
+                    return t;
                 }
-                return false;
+                return null;
             }
         }
     }
@@ -4314,7 +4338,6 @@ loop:
                     // rest parameter must be last
                     expectDontAdvance(endType);
                     parameters.add(ident);
-                    break;
                 } else if (type == ASSIGN && (ES6_DEFAULT_PARAMETER && isES6())) {
                     next();
                     ident = ident.setIsDefaultParameter();
@@ -4344,6 +4367,9 @@ loop:
                     if (ident.isRestParameter() || ident.isDefaultParameter()) {
                         currentFunction.setSimpleParameterList(false);
                     }
+                }
+                if (restParameter) {
+                    break;
                 }
             } else {
                 final Expression pattern = bindingPattern(yield, await);
@@ -4877,11 +4903,22 @@ loop:
                 return new ExpressionList(primaryToken, finish, Collections.emptyList());
             } else if (ES6_REST_PARAMETER && type == ELLIPSIS) {
                 // (...rest)
-                IdentNode restParam = formalParameterList(false, false).get(0);
-                expectDontAdvance(RPAREN);
-                nextOrEOL();
-                expectDontAdvance(ARROW);
-                return new ExpressionList(primaryToken, finish, Collections.singletonList(restParam));
+                final IdentNode name = new IdentNode(primaryToken, Token.descPosition(primaryToken), ARROW_FUNCTION_NAME);
+                final ParserContextFunctionNode functionNode = createParserContextFunctionNode(name, primaryToken, FunctionNode.Kind.ARROW, 0, null);
+                // Push a dummy functionNode at the top of the stack to avoid
+                // pollution of the current function by parameters of the arrow function.
+                // Real processing/verification of the parameters of the arrow function
+                // is performed later through convertArrowFunctionParameterList().
+                lc.push(functionNode);
+                try {
+                    IdentNode restParam = formalParameterList(false, false).get(0);
+                    expectDontAdvance(RPAREN);
+                    nextOrEOL();
+                    expectDontAdvance(ARROW);
+                    return new ExpressionList(primaryToken, finish, Collections.singletonList(restParam));
+                } finally {
+                    lc.pop(functionNode);
+                }
             }
         }
 
@@ -5466,10 +5503,17 @@ loop:
     private void addTemplateLiteralString(final ArrayList<Expression> rawStrings, final ArrayList<Expression> cookedStrings) {
         final long stringToken = token;
         final String rawString = lexer.valueOfRawString(stringToken);
-        final String cookedString = (String) getValue();
+        final String cookedString = lexer.valueOfTaggedTemplateString(stringToken);
         next();
+        Expression cookedExpression;
+        if (cookedString == null) {
+            // A tagged template string with an invalid escape sequence has value 'undefined'
+            cookedExpression = newUndefinedLiteral(stringToken, finish);
+        } else {
+            cookedExpression = LiteralNode.newInstance(stringToken, finish, cookedString);
+        }
         rawStrings.add(LiteralNode.newInstance(stringToken, finish, rawString));
-        cookedStrings.add(LiteralNode.newInstance(stringToken, finish, cookedString));
+        cookedStrings.add(cookedExpression);
     }
 
 

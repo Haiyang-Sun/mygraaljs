@@ -8,7 +8,7 @@ suite = {
         {
            "name" : "regex",
            "subdir" : True,
-           "version" : "f9116363b929ae9375e44640650d5fe8e378bd6a",
+           "version" : "8ed0b0b53c7e722b0779c29d7e3532fcf27ab3ac",
            "urls" : [
                 {"url" : "https://github.com/graalvm/graal.git", "kind" : "git"},
                 {"url" : "https://curio.ssw.jku.at/nexus/content/repositories/snapshots", "kind" : "binary"},
@@ -17,7 +17,7 @@ suite = {
         {
            "name" : "tools",
            "subdir" : True,
-           "version" : "1f2fbfb014677bd1f16bcb98ebe998e904a5a7b9",
+           "version" : "8ed0b0b53c7e722b0779c29d7e3532fcf27ab3ac",
            "urls" : [
                 {"url" : "https://github.com/graalvm/graal.git", "kind" : "git"},
                 {"url" : "https://curio.ssw.jku.at/nexus/content/repositories/snapshots", "kind" : "binary"},
@@ -259,7 +259,7 @@ suite = {
       "dependencies" : [
         "com.oracle.truffle.js.shell",
         "NETBEANS_PROFILER",
-        "graaljs",
+        "com.oracle.truffle.js.builtins",
       ],
       "checkstyle" : "com.oracle.truffle.js.runtime",
       "javaCompliance" : "1.8",
@@ -271,12 +271,13 @@ suite = {
       "sourceDirs" : ["src"],
       "dependencies" : [
         "mx:JUNIT",
-        "graaljs",
+        "com.oracle.truffle.js.nodes",
       ],
       "annotationProcessors" : ["truffle:TRUFFLE_DSL_PROCESSOR"],
       "checkstyle" : "com.oracle.truffle.js.runtime",
       "javaCompliance" : "1.8",
       "workingSets" : "Truffle,JavaScript",
+      "testProject" : True,
     },
 
     "com.oracle.truffle.js.scriptengine" : {
@@ -302,6 +303,7 @@ suite = {
       "checkstyle" : "com.oracle.truffle.js.runtime",
       "javaCompliance" : "1.8",
       "workingSets" : "Truffle,JavaScript",
+      "testProject" : True,
     },
 
     "com.oracle.truffle.js.test.external" : {
@@ -319,16 +321,6 @@ suite = {
       "javaCompliance" : "1.8",
       "workingSets" : "Truffle,JavaScript,Test",
       "testProject" : True,
-    },
-
-    "graaljs" : {
-      "dependencies" : [
-        "com.oracle.truffle.js.parser",
-      ],
-      "buildDependencies" : ["com.oracle.truffle.js.snapshot"],
-      "class" : "GraalJsProject",
-      "prefix" : "",
-      "outputDir" : "mxbuild/graal/graaljs"
     },
 
     "icu4j-data": {
@@ -356,7 +348,7 @@ suite = {
   "distributions" : {
     "GRAALJS" : {
       "subDir" : "src",
-      "dependencies" : ["graaljs"],
+      "dependencies" : ["com.oracle.truffle.js.parser"],
       "distDependencies" : [
         "regex:TREGEX",
         "truffle:TRUFFLE_API",
@@ -473,6 +465,15 @@ suite = {
         "sdk:POLYGLOT_TCK"
       ],
       "maven" : False
+    },
+
+    "GRAALJS_GRAALVM_SUPPORT" : {
+      "native" : True,
+      "description" : "Graal.js support distribution for the GraalVM",
+      "layout" : {
+        "native-image.properties": "file:mx.graal-js/native-image.properties",
+        "./": "file:README.md",
+      },
     },
   }
 }

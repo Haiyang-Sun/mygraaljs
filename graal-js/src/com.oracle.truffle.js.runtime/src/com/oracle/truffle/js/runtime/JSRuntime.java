@@ -51,6 +51,7 @@ import com.oracle.truffle.api.interop.ForeignAccess;
 import com.oracle.truffle.api.interop.Message;
 import com.oracle.truffle.api.interop.TruffleObject;
 import com.oracle.truffle.api.interop.java.JavaInterop;
+import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.RootNode;
 import com.oracle.truffle.api.object.DynamicObject;
 import com.oracle.truffle.api.object.HiddenKey;
@@ -127,6 +128,10 @@ public final class JSRuntime {
     public static final HiddenKey ITERATED_OBJECT_ID = new HiddenKey("IteratedObject");
     public static final HiddenKey ITERATOR_NEXT_INDEX = new HiddenKey("IteratorNextIndex");
     public static final HiddenKey ENUMERATE_ITERATOR_ID = new HiddenKey("EnumerateIterator");
+
+    public static final int ITERATION_KIND_KEY = 1 << 0;
+    public static final int ITERATION_KIND_VALUE = 1 << 1;
+    public static final int ITERATION_KIND_KEY_PLUS_VALUE = ITERATION_KIND_KEY | ITERATION_KIND_VALUE;
 
     private JSRuntime() {
         // this class should not be instantiated
@@ -2115,11 +2120,13 @@ public final class JSRuntime {
                 throw Errors.createTypeErrorProxyRevoked();
             }
             return isArrayProxy(proxy);
+        } else if (isForeignObject(obj)) {
+            return JSInteropNodeUtil.hasSize((TruffleObject) obj);
         }
         return false;
     }
 
-    public static boolean isArray(Object obj, ConditionProfile profile1, ConditionProfile profile2) {
+    public static boolean isArray(Object obj, ConditionProfile profile1, ConditionProfile profile2, Node hasSizeNode) {
         if (profile1.profile(JSArray.isJSArray(obj))) {
             return true;
         } else if (profile2.profile(JSProxy.isProxy(obj))) {
@@ -2128,6 +2135,8 @@ public final class JSRuntime {
                 throw Errors.createTypeErrorProxyRevoked();
             }
             return isArrayProxy(proxy);
+        } else if (isForeignObject(obj)) {
+            return JSInteropNodeUtil.hasSize((TruffleObject) obj, hasSizeNode);
         }
         return false;
     }

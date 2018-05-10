@@ -1171,7 +1171,7 @@ namespace v8 {
         CurrentIsolate()->AddGCEpilogueCallback(GraalIsolate::kV8GCCallbackType, (void*) callback);
     }
 
-    bool EqualFlags(char* name, const char* normalized_name) {
+    bool EqualOptions(char* name, const char* normalized_name) {
         while (*name && *normalized_name) {
             char c = *name;
             if (c == '_') {
@@ -1183,7 +1183,8 @@ namespace v8 {
             name++;
             normalized_name++;
         }
-        return *name == *normalized_name;
+        return (*name == *normalized_name // option without a value
+                || (!*normalized_name && *name == '=')); // option with a value
     }
 
     void V8::SetFlagsFromCommandLine(int* argc, char** argv, bool remove_flags) {
@@ -1211,9 +1212,9 @@ namespace v8 {
                     vm_args.append(" ");
                 }
                 vm_args.append("-").append(trailing);
-            } else if (EqualFlags(arg, "--abort-on-uncaught-exception")) {
+            } else if (EqualOptions(arg, "--abort-on-uncaught-exception")) {
                 GraalIsolate::SetAbortOnUncaughtException(true);
-            } else if (!strncmp(arg, "--max-old-space-size=", sizeof ("--max-old-space-size=") - 1)) {
+            } else if (EqualOptions(arg, "--max-old-space-size")) {
                 char* start = arg + sizeof ("--max-old-space-size");
                 char* end = nullptr;
                 long value = strtol(start, &end, 10);
@@ -1503,10 +1504,21 @@ namespace v8 {
     Local<Value> TryCatch::Exception() const {
         if (HasCaught()) {
             GraalIsolate* graal_isolate = reinterpret_cast<GraalIsolate*> (isolate_);
-            jobject java_exception = graal_isolate->GetJNIEnv()->ExceptionOccurred();
+            JNIEnv* env = graal_isolate->GetJNIEnv();
+            jthrowable java_exception = env->ExceptionOccurred();
             jobject java_context = graal_isolate->CurrentJavaContext();
+
+            // We should not perform the following Java call with a pending exception
+            env->ExceptionClear();
+
             JNI_CALL(jobject, exception_object, graal_isolate, GraalAccessMethod::try_catch_exception, Object, java_context, java_exception);
             GraalValue* graal_exception = GraalValue::FromJavaObject(graal_isolate, exception_object);
+
+            // Restore the original pending exception (unless we managed
+            // to generate a new one from the call above already)
+            if (!env->ExceptionCheck()) {
+                env->Throw(java_exception);
+            }
             return reinterpret_cast<Value*> (graal_exception);
         } else {
             return Local<Value>();

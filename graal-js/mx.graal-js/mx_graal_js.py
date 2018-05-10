@@ -1,12 +1,14 @@
 #
 # ----------------------------------------------------------------------------------------------------
 #
-# Copyright (c) 2007, 2015, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2007, 2018, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # This code is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License version 2 only, as
-# published by the Free Software Foundation.
+# published by the Free Software Foundation.  Oracle designates this
+# particular file as subject to the "Classpath" exception as provided
+# by Oracle in the LICENSE file that accompanied this code.
 #
 # This code is distributed in the hope that it will be useful, but WITHOUT
 # ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -27,7 +29,8 @@
 import os, zipfile, re, shutil, tarfile
 from os.path import join, exists, isdir, getmtime
 
-import mx, mx_graal_js_benchmark # pylint: disable=unused-import
+import mx_graal_js_benchmark # pylint: disable=unused-import
+import mx, mx_sdk
 from mx_gate import Task, add_gate_runner
 from mx_unittest import unittest
 
@@ -52,7 +55,6 @@ def _graal_js_gate_runner(args, tasks):
         'directbytebuffer': ['gate', '-Dtruffle.js.DirectByteBuffer=true'],
         'cloneuninitialized': ['gate', '-Dtruffle.js.TestCloneUninitialized=true'],
         'lazytranslation': ['gate', '-Dtruffle.js.LazyTranslation=true'],
-        'nosnapshots': ['gate', '-Dtruffle.js.Snapshots=false'],
     }
 
     gateTestCommands = {
@@ -70,74 +72,6 @@ def _graal_js_gate_runner(args, tasks):
                     gateTestCommands[testCommandName](gateTestConfigs[testConfigName])
 
 add_gate_runner(_suite, _graal_js_gate_runner)
-
-class GraalJsProject(mx.ArchivableProject, mx.ClasspathDependency):
-    def __init__(self, suite, name, deps, workingSets, theLicense, **args):
-        super(GraalJsProject, self).__init__(suite, name, deps, workingSets, theLicense)
-        assert 'prefix' in args
-        assert 'outputDir' in args
-
-    def classpath_repr(self, resolve=True):
-        return self.output_dir()
-
-    def getBuildTask(self, args):
-        return GraalJsBuildTask(self, args, 1)
-
-    def get_output_root(self):
-        return join(self.dir, self.outputDir)
-
-    def output_dir(self):
-        return join(self.get_output_root(), "bin")
-
-    def archive_prefix(self):
-        return self.prefix
-
-    def getResults(self):
-        return mx.ArchivableProject.walk(self.output_dir())
-
-class GraalJsBuildTask(mx.ArchivableBuildTask):
-    def __str__(self):
-        return 'Snapshotting {}'.format(self.subject)
-
-    def needsBuild(self, newestInput):
-        if self.args.force:
-            return (True, 'forced build')
-
-        if not self.subject.getResults():
-            return (True, 'output files are missing')
-        return (False, 'this project does not contain input files')
-
-    def newestOutput(self):
-        return mx.TimeStampFile.newest(self.subject.getResults())
-
-    def build(self):
-        if hasattr(self.args, "jdt") and self.args.jdt and not self.args.force_javac:
-            return
-        _output_dir = join(_suite.dir, self.subject.outputDir)
-        cp = mx.classpath('com.oracle.truffle.js.snapshot')
-        tool_main_class = 'com.oracle.truffle.js.snapshot.SnapshotTool'
-
-        _output_dir_bin = join(_output_dir, "bin")
-        mx.ensure_dir_exists(_output_dir_bin)
-        mx.run_java(['-cp', cp, tool_main_class, '--binary', '--internal'] + ['--outdir=' + _output_dir_bin], cwd=_output_dir_bin)
-        _output_dir_src_gen = join(_output_dir, "src_gen")
-        mx.ensure_dir_exists(_output_dir_src_gen)
-        mx.run_java(['-cp', cp, tool_main_class, '--java', '--internal'] + ['--outdir=' + _output_dir_src_gen], cwd=_output_dir_src_gen)
-
-        compliance = mx.JavaCompliance("1.8")
-        jdk = mx.get_jdk(compliance, tag=mx.DEFAULT_JDK_TAG)
-
-        java_file_list = []
-        for root, _, files in os.walk(_output_dir_src_gen, followlinks=True):
-            java_file_list += [join(root, name) for name in files if name.endswith('.java')]
-
-        java_file_list = sorted(java_file_list)  # for reproducibility
-        mx.run([jdk.javac, '-source', str(compliance), '-target', str(compliance), '-classpath', mx.classpath('com.oracle.truffle.js.parser'), '-d', _output_dir_bin] + java_file_list)
-
-    def clean(self, forBuild=False):
-        _output_dir = join(_suite.dir, self.subject.outputDir)
-        if exists(_output_dir):
-            mx.rmtree(_output_dir)
 
 class ArchiveProject(mx.ArchivableProject):
     def __init__(self, suite, name, deps, workingSets, theLicense, **args):
@@ -369,6 +303,33 @@ def deploy_binary_if_master(args):
     else:
         mx.warn('The active branch is "%s". Binaries are deployed only if the active branch is "%s".' % (active_branch, primary_branch))
         return 0
+
+
+mx_sdk.register_graalvm_component(mx_sdk.GraalVmLanguage(
+    suite=_suite,
+    name='Graal.js',
+    short_name='js',
+    license_files=[],
+    third_party_license_files=[],
+    truffle_jars=[
+        'graal-js:GRAALJS',
+        'graal-js:ICU4J',
+        'mx:ASM_DEBUG_ALL',
+    ],
+    support_distributions=[
+        'graal-js:GRAALJS_GRAALVM_SUPPORT',
+        'graal-js:ICU4J-DIST'
+    ],
+    launcher_configs=[
+        mx_sdk.LanguageLauncherConfig(
+            destination='bin/<exe:js>',
+            jar_distributions=['graal-js:GRAALJS_LAUNCHER'],
+            main_class='com.oracle.truffle.js.shell.JSLauncher',
+            build_args=['--language:js']
+        )
+    ],
+    boot_jars=['graal-js:GRAALJS_SCRIPTENGINE']
+))
 
 mx.update_commands(_suite, {
     'deploy-binary-if-master' : [deploy_binary_if_master, ''],

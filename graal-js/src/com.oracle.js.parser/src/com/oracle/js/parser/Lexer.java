@@ -103,7 +103,6 @@ public class Lexer extends Scanner {
 
     private static final String JAVASCRIPT_WHITESPACE_HIGH =
         "\u1680" + // Ogham space mark
-        "\u180e" + // separator, Mongolian vowel
         "\u2000" + // en quad
         "\u2001" + // em quad
         "\u2002" + // en space
@@ -1407,6 +1406,72 @@ public class Lexer extends Scanner {
     }
 
     /**
+     * Determines if the specified character is permissible as the first character in a ECMAScript identifier.
+     * 
+     * @param codePoint the character to be tested
+     * @return {@code true} if the character may start an ECMAScript identifier; {@code false} otherwise
+     */
+    private static boolean isJSIdentifierStart(int codePoint) {
+        return (Character.isUnicodeIdentifierStart(codePoint) && codePoint != '\u2e2f')
+                || codePoint == '$'
+                || codePoint == '_'
+                || isOtherIDStart(codePoint);
+    }
+
+    /**
+     * Determines if the specified character has Other_ID_Start Unicode property.
+     * 
+     * @param codePoint the character to be tested.
+     * @return {@code true} if the character has Other_ID_Start Unicode property,
+     * {@code false} otherwise.
+     */
+    private static boolean isOtherIDStart(int codePoint) {
+        return codePoint == 0x1885
+                || codePoint == 0x1886
+                || codePoint == 0x2118
+                || codePoint == 0x212e
+                || codePoint == 0x309b
+                || codePoint == 0x309c;
+    }
+
+    /**
+     * Determines if the specified character may be part of an ECMAScript identifier as other than the first character.
+     * 
+     * @param codePoint the character to be tested
+     * @return {@code true} if the character may be part of an ECMAScript identifier; {@code false} otherwise
+     */
+    private static boolean isJSIdentifierPart(int codePoint) {
+        return (Character.isUnicodeIdentifierPart(codePoint) && !Character.isIdentifierIgnorable(codePoint) && codePoint != '\u2e2f')
+                || codePoint == '$'
+                || codePoint == '\u200c'  // <ZWNJ>
+                || codePoint == '\u200d'  // <ZWJ>
+                || isOtherIDContinue(codePoint);
+    }
+
+    /**
+     * Determines if the specified character has Other_ID_Continue Unicode property.
+     * 
+     * @param codePoint the character to be tested.
+     * @return {@code true} if the character has Other_ID_Continue Unicode property,
+     * {@code false} otherwise.
+     */
+    private static boolean isOtherIDContinue(int codePoint) {
+        return isOtherIDStart(codePoint)
+                || codePoint == 0x00b7
+                || codePoint == 0x0387
+                || codePoint == 0x1369
+                || codePoint == 0x136a
+                || codePoint == 0x136b
+                || codePoint == 0x136c
+                || codePoint == 0x136d
+                || codePoint == 0x136e
+                || codePoint == 0x136f
+                || codePoint == 0x1370
+                || codePoint == 0x1371
+                || codePoint == 0x19da;
+    }
+
+    /**
      * Scan over identifier characters.
      *
      * @return Length of identifier or zero if none found.
@@ -1417,12 +1482,16 @@ public class Lexer extends Scanner {
         // Make sure first character is valid start character.
         if (ch0 == '\\' && ch1 == 'u') {
             skip(2);
-            final int ch = unicodeEscapeSequence(TokenType.IDENT);
+            final int codePoint = unicodeEscapeSequence(TokenType.IDENT);
 
-            if (!Character.isJavaIdentifierStart(ch)) {
+            if (!isJSIdentifierStart(codePoint)) {
                 error(Lexer.message("illegal.identifier.character"), TokenType.IDENT, start, position - start);
             }
-        } else if (!Character.isJavaIdentifierStart(ch0)) {
+        } else if (isJSIdentifierStart(ch0)) {
+            skip(1);
+        } else if (Character.isHighSurrogate(ch0) && Character.isLowSurrogate(ch1) && isJSIdentifierStart(Character.toCodePoint(ch0, ch1))) {
+            skip(2);
+        } else {
             // Not an identifier.
             return 0;
         }
@@ -1431,13 +1500,15 @@ public class Lexer extends Scanner {
         while (!atEOF()) {
             if (ch0 == '\\' && ch1 == 'u') {
                 skip(2);
-                final int ch = unicodeEscapeSequence(TokenType.IDENT);
+                final int codePoint = unicodeEscapeSequence(TokenType.IDENT);
 
-                if (!Character.isJavaIdentifierPart(ch)) {
+                if (!isJSIdentifierPart(codePoint)) {
                     error(Lexer.message("illegal.identifier.character"), TokenType.IDENT, start, position - start);
                 }
-            } else if (Character.isJavaIdentifierPart(ch0)) {
+            } else if (isJSIdentifierPart(ch0)) {
                 skip(1);
+            } else if (Character.isHighSurrogate(ch0) && Character.isLowSurrogate(ch1) && isJSIdentifierPart(Character.toCodePoint(ch0, ch1))) {
+                skip(2);
             } else {
                 break;
             }
@@ -1803,7 +1874,8 @@ public class Lexer extends Scanner {
                 } else if (type == RBRACE && pauseOnRightBrace) {
                     break;
                 }
-            } else if (Character.isJavaIdentifierStart(ch0) || ch0 == '\\' && ch1 == 'u') {
+            } else if (isJSIdentifierStart((Character.isHighSurrogate(ch0) && Character.isLowSurrogate(ch1)) ? Character.toCodePoint(ch0, ch1) : ch0)
+                    || (ch0 == '\\' && ch1 == 'u')) {
                 // Scan and add identifier or keyword.
                 scanIdentifierOrKeyword();
             } else if (isStringDelimiter(ch0)) {
@@ -1903,6 +1975,26 @@ public class Lexer extends Scanner {
         }
 
         return null;
+    }
+
+    /**
+     * Returns the Template Value of the specified part of a tagged template literal.
+     *
+     * @param token template string token.
+     * @return Template Value if the value is string, returns {@code null}
+     * otherwise (i.e. if the value is undefined).
+     */
+    String valueOfTaggedTemplateString(final long token) {
+        final int savePosition = position;
+
+        try {
+            return valueOfString(Token.descPosition(token), Token.descLength(token), true);
+        } catch (ParserException ex) {
+            // An invalid escape sequence in a tagged template string is not an error.
+            return null;
+        } finally {
+            reset(savePosition);
+        }
     }
 
     /**

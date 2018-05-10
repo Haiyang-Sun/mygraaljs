@@ -58,7 +58,6 @@ import com.oracle.truffle.js.nodes.function.JSFunctionCallNode;
 import com.oracle.truffle.js.runtime.Errors;
 import com.oracle.truffle.js.runtime.JSArguments;
 import com.oracle.truffle.js.runtime.JSContext;
-import com.oracle.truffle.js.runtime.JSException;
 import com.oracle.truffle.js.runtime.JSRuntime;
 import com.oracle.truffle.js.runtime.UserScriptException;
 import com.oracle.truffle.js.runtime.objects.Completion;
@@ -262,13 +261,12 @@ class YieldStarNode extends YieldNode {
         if (throwMethod != Undefined.instance) {
             DynamicObject innerResult = callThrowMethod(iterator, received, throwMethod);
             if (iteratorCompleteNode.execute(innerResult)) {
-                return returnValue(frame, iteratorValueNode.execute(innerResult));
+                return iteratorValueNode.execute(innerResult);
             }
             return saveStateAndYield(frame, iterator, innerResult);
         } else {
-            JSException error = Errors.createTypeErrorYieldStarThrowMethodMissing(this);
-            iteratorCloseNode.executeAbrupt(iterator);
-            throw error; // should happen inside iteratorClose
+            iteratorCloseNode.executeVoid(iterator);
+            throw Errors.createTypeErrorYieldStarThrowMethodMissing(this);
         }
     }
 

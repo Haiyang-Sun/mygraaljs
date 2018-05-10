@@ -311,6 +311,10 @@
     "filePath" : "mjsunit/es6/super.js",
     "status" : "FAIL"
   }, {
+    "filePath" : "mjsunit/es6/templates.js",
+    "status" : "FAIL",
+    "comment" : "Not up to date with the latest spec. Passes on V8 with --no-harmony-template-escapes only."
+  }, {
     "filePath" : "mjsunit/es6/throw-type-error-function-restrictions.js",
     "status" : "FAIL"
   }, {
@@ -641,7 +645,8 @@
     "status" : "FAIL"
   }, {
     "filePath" : "mjsunit/harmony/regexp-named-captures.js",
-    "status" : "FAIL"
+    "status" : "FAIL",
+    "comment" : "Fails because of: missing negative lookbehind support in TRegex's parser, missing named capture groups in Joni and because some of the tests towards the end are outdated w.r.t. the spec (starting with line 374)."
   }, {
     "filePath" : "mjsunit/harmony/regexp-property-disabled.js",
     "status" : "SKIP",
@@ -663,16 +668,8 @@
     "status" : "SKIP",
     "comment" : "non-standard do-expressions"
   }, {
-    "filePath" : "mjsunit/harmony/regress/regress-6100.js",
-    "status" : "FAIL",
-    "comment" : "TODO: evaluate (V8 tests update 2017-07-07)"
-  }, {
     "filePath" : "mjsunit/harmony/sloppy-legacy-duplicate-generators.js",
     "status" : "FAIL"
-  }, {
-    "filePath" : "mjsunit/harmony/template-escapes.js",
-    "status" : "FAIL",
-    "comment" : "TODO: evaluate (V8 tests update 2017-07-07)"
   }, {
     "filePath" : "mjsunit/html-comments.js",
     "status" : "FAIL"
@@ -1827,9 +1824,6 @@
     "filePath" : "mjsunit/value-wrapper-accessor.js",
     "status" : "SKIP",
     "comment" : "fails due to GenericPropertyGetNode (in noIC mode)"
-  }, {
-    "filePath" : "mjsunit/var.js",
-    "status" : "FAIL"
   }, {
     "filePath" : "mjsunit/verify-assert-false.js",
     "status" : "SKIP",
