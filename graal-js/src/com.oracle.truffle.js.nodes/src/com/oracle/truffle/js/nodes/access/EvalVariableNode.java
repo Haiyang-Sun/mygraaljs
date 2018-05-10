@@ -116,22 +116,6 @@ public final class EvalVariableNode extends JavaScriptNode implements ReadNode, 
     }
 
     @Override
-    public boolean hasTag(Class<? extends Tag> tag) {
-        if (tag == ReadVariableExpressionTag.class && !isWrite()) {
-            return true;
-        } else if (tag == WriteVariableExpressionTag.class && isWrite()) {
-            return true;
-        } else {
-            return super.hasTag(tag);
-        }
-    }
-
-    @Override
-    public Object getNodeObject() {
-        return JSTags.createNodeObjectDescriptor("name", varName);
-    }
-
-    @Override
     public Object execute(VirtualFrame frame) {
         Object dynamicScope = dynamicScopeNode.execute(frame);
         if (dynamicScope != Undefined.instance && hasPropertyNode.hasProperty(dynamicScope)) {

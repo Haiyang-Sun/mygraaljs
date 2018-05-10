@@ -75,20 +75,6 @@ public abstract class JSGuardDisconnectedArgumentRead extends JavaScriptNode imp
         return JSGuardDisconnectedArgumentReadNodeGen.create(index, readElementNode, argumentsArray, slot);
     }
 
-    @Override
-    public boolean hasTag(Class<? extends Tag> tag) {
-        if (tag == ReadVariableExpressionTag.class) {
-            return true;
-        } else {
-            return super.hasTag(tag);
-        }
-    }
-
-    @Override
-    public Object getNodeObject() {
-        return JSTags.createNodeObjectDescriptor("name", slot.getIdentifier());
-    }
-
     @Specialization(guards = "!isArgumentsDisconnected(argumentsArray)")
     public Object doObject(DynamicObject argumentsArray, @Cached("createBinaryProfile()") ConditionProfile unconnectedProfile) {
         assert JSArgumentsObject.isJSArgumentsObject(argumentsArray);

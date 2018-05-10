@@ -86,20 +86,6 @@ public abstract class JSGuardDisconnectedArgumentWrite extends JavaScriptNode im
 
     @Override
     public Object getNodeObject() {
-        return JSTags.createNodeObjectDescriptor("name", slot.getIdentifier());
-    }
-
-    @Override
-    public boolean hasTag(Class<? extends Tag> tag) {
-        if (tag == WriteVariableExpressionTag.class) {
-            return true;
-        } else {
-            return super.hasTag(tag);
-        }
-    }
-
-    @Override
-    public Object getNodeObject() {
         assert (argumentsArrayNode instanceof JSReadFrameSlotNode);
         NodeObjectDescriptor desc = JSTags.createNodeObjectDescriptor("argsnode", argumentsArrayNode);
         desc.addProperty("name", this.index);
