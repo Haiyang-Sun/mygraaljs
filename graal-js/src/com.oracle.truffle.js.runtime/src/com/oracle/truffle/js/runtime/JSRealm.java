@@ -52,8 +52,6 @@ import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.api.TruffleContext;
 import com.oracle.truffle.api.TruffleLanguage;
-import com.oracle.truffle.api.frame.FrameDescriptor;
-import com.oracle.truffle.api.frame.MaterializedFrame;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.object.DynamicObject;
 import com.oracle.truffle.api.object.DynamicObjectFactory;
@@ -66,6 +64,7 @@ import com.oracle.truffle.js.runtime.builtins.JSArgumentsObject;
 import com.oracle.truffle.js.runtime.builtins.JSArray;
 import com.oracle.truffle.js.runtime.builtins.JSArrayBuffer;
 import com.oracle.truffle.js.runtime.builtins.JSArrayBufferView;
+import com.oracle.truffle.js.runtime.builtins.JSBigInt;
 import com.oracle.truffle.js.runtime.builtins.JSBoolean;
 import com.oracle.truffle.js.runtime.builtins.JSCollator;
 import com.oracle.truffle.js.runtime.builtins.JSConstructor;
@@ -98,7 +97,6 @@ import com.oracle.truffle.js.runtime.builtins.JSSharedArrayBuffer;
 import com.oracle.truffle.js.runtime.builtins.JSString;
 import com.oracle.truffle.js.runtime.builtins.JSSymbol;
 import com.oracle.truffle.js.runtime.builtins.JSTest262;
-import com.oracle.truffle.js.runtime.builtins.JSTestNashorn;
 import com.oracle.truffle.js.runtime.builtins.JSTestV8;
 import com.oracle.truffle.js.runtime.builtins.JSUserObject;
 import com.oracle.truffle.js.runtime.builtins.JSWeakMap;
@@ -108,7 +106,6 @@ import com.oracle.truffle.js.runtime.builtins.SIMDType.SIMDTypeFactory;
 import com.oracle.truffle.js.runtime.interop.JavaImporter;
 import com.oracle.truffle.js.runtime.interop.JavaPackage;
 import com.oracle.truffle.js.runtime.objects.Accessor;
-import com.oracle.truffle.js.runtime.objects.Dead;
 import com.oracle.truffle.js.runtime.objects.JSAttributes;
 import com.oracle.truffle.js.runtime.objects.JSObject;
 import com.oracle.truffle.js.runtime.objects.JSObjectUtil;
@@ -119,7 +116,6 @@ import com.oracle.truffle.js.runtime.objects.Undefined;
  */
 public class JSRealm implements ShapeContext {
 
-    public static final String INTERNAL_JS_FILE_NAME_PREFIX = "internal:";
     public static final String POLYGLOT_CLASS_NAME = "Polyglot";
     // used for non-public properties of Polyglot
     public static final String POLYGLOT_INTERNAL_CLASS_NAME = "PolyglotInternal";
@@ -175,6 +171,8 @@ public class JSRealm implements ShapeContext {
     private final DynamicObjectFactory booleanFactory;
     private final JSConstructor numberConstructor;
     private final DynamicObjectFactory numberFactory;
+    private final JSConstructor bigIntConstructor;
+    private final DynamicObjectFactory bigIntFactory;
     private final JSConstructor stringConstructor;
     private final DynamicObjectFactory stringFactory;
     private final JSConstructor regExpConstructor;
@@ -285,7 +283,7 @@ public class JSRealm implements ShapeContext {
     private volatile Map<List<String>, DynamicObject> templateRegistry;
     private final Shape dictionaryShapeObjectPrototype;
 
-    private final MaterializedFrame globalScope;
+    private final DynamicObject globalScope;
 
     private TruffleLanguage.Env truffleLanguageEnv;
 
@@ -343,6 +341,7 @@ public class JSRealm implements ShapeContext {
         }
 
         this.globalObject = JSGlobalObject.create(this, objectPrototype);
+        this.globalScope = JSObject.createNoTrack(context.getGlobalScopeShape());
 
         this.objectConstructor = createObjectConstructor(this, objectPrototype);
         JSObjectUtil.putDataProperty(context, this.objectPrototype, JSObject.CONSTRUCTOR, objectConstructor, JSAttributes.getDefaultNotEnumerable());
@@ -360,6 +359,8 @@ public class JSRealm implements ShapeContext {
         this.booleanFactory = JSBoolean.makeInitialShape(context, booleanConstructor.getPrototype()).createFactory();
         this.numberConstructor = JSNumber.createConstructor(this);
         this.numberFactory = JSNumber.makeInitialShape(context, numberConstructor.getPrototype()).createFactory();
+        this.bigIntConstructor = JSBigInt.createConstructor(this);
+        this.bigIntFactory = JSBigInt.makeInitialShape(context, bigIntConstructor.getPrototype()).createFactory();
         this.stringConstructor = JSString.createConstructor(this);
         this.stringFactory = JSString.makeInitialShape(context, stringConstructor.getPrototype()).createFactory();
         this.regExpConstructor = JSRegExp.createConstructor(this);
@@ -484,8 +485,6 @@ public class JSRealm implements ShapeContext {
         if (JSTruffleOptions.Stage3 && !context.isOptionV8CompatibilityMode()) {
             JSObjectUtil.putDataProperty(context, this.globalObject, "global", this.globalObject, JSAttributes.getDefaultNotEnumerable());
         }
-
-        this.globalScope = Truffle.getRuntime().createMaterializedFrame(JSArguments.createZeroArg(globalObject, null), new FrameDescriptor(Dead.instance()));
 
         this.dictionaryShapeObjectPrototype = JSTruffleOptions.DictionaryObject ? JSDictionaryObject.makeDictionaryShape(context, objectPrototype) : null;
 
@@ -655,6 +654,10 @@ public class JSRealm implements ShapeContext {
 
     public final JSConstructor getNumberConstructor() {
         return numberConstructor;
+    }
+
+    public final JSConstructor getBigIntConstructor() {
+        return bigIntConstructor;
     }
 
     public final JSConstructor getStringConstructor() {
@@ -952,7 +955,6 @@ public class JSRealm implements ShapeContext {
         CallTarget throwTypeErrorCallTarget = Truffle.getRuntime().createCallTarget(new JavaScriptRootNode(context.getLanguage(), null, null) {
 
             @Override
-            @TruffleBoundary
             public Object execute(VirtualFrame frame) {
                 throw Errors.createTypeError("[[ThrowTypeError]] defined by ECMAScript");
             }
@@ -982,6 +984,7 @@ public class JSRealm implements ShapeContext {
         putGlobalProperty(global, JSString.CLASS_NAME, getStringConstructor().getFunctionObject());
         putGlobalProperty(global, JSDate.CLASS_NAME, getDateConstructor().getFunctionObject());
         putGlobalProperty(global, JSNumber.CLASS_NAME, getNumberConstructor().getFunctionObject());
+        putGlobalProperty(global, JSBigInt.CLASS_NAME, getBigIntConstructor().getFunctionObject());
         putGlobalProperty(global, JSBoolean.CLASS_NAME, getBooleanConstructor().getFunctionObject());
         putGlobalProperty(global, JSRegExp.CLASS_NAME, getRegExpConstructor().getFunctionObject());
         putGlobalProperty(global, JSMath.CLASS_NAME, mathObject);
@@ -1005,6 +1008,9 @@ public class JSRealm implements ShapeContext {
         JSObjectUtil.putDataProperty(context, global, Undefined.NAME, Undefined.instance);
 
         JSObjectUtil.putFunctionsFromContainer(this, global, JSGlobalObject.CLASS_NAME);
+        if (context.isOptionNashornCompatibilityMode()) {
+            JSObjectUtil.putFunctionsFromContainer(this, global, JSGlobalObject.CLASS_NAME_NASHORN_EXTENSIONS);
+        }
         this.evalFunctionObject = JSObject.get(global, JSGlobalObject.EVAL_NAME);
         this.applyFunctionObject = JSObject.get(getFunctionPrototype(), "apply");
         this.callFunctionObject = JSObject.get(getFunctionPrototype(), "call");
@@ -1045,9 +1051,6 @@ public class JSRealm implements ShapeContext {
         if (JSTruffleOptions.TestV8Mode) {
             putGlobalProperty(global, JSTestV8.CLASS_NAME, JSTestV8.create(this));
         }
-        if (JSTruffleOptions.TestNashornMode) {
-            putGlobalProperty(global, JSTestNashorn.CLASS_NAME, JSTestNashorn.create(this));
-        }
         if (context.getEcmaScriptVersion() >= 6) {
             Object parseInt = JSObject.get(global, "parseInt");
             Object parseFloat = JSObject.get(global, "parseFloat");
@@ -1068,7 +1071,7 @@ public class JSRealm implements ShapeContext {
         if (context.isOptionSharedArrayBuffer()) {
             putGlobalProperty(global, SHARED_ARRAY_BUFFER_CLASS_NAME, getSharedArrayBufferConstructor().getFunctionObject());
         }
-        if (context.isOptionAtomics() && !JSTruffleOptions.SubstrateVM) {
+        if (context.isOptionAtomics()) {
             putGlobalProperty(global, ATOMICS_CLASS_NAME, createAtomics());
         }
         if (JSTruffleOptions.GraalBuiltin) {
@@ -1289,6 +1292,11 @@ public class JSRealm implements ShapeContext {
     }
 
     @Override
+    public final DynamicObjectFactory getBigIntFactory() {
+        return bigIntFactory;
+    }
+
+    @Override
     public final DynamicObjectFactory getSymbolFactory() {
         return symbolFactory;
     }
@@ -1396,36 +1404,43 @@ public class JSRealm implements ShapeContext {
         return callSiteFactory;
     }
 
-    public final MaterializedFrame getGlobalScope() {
-        return JSFrameUtil.castMaterializedFrame(globalScope);
+    public final DynamicObject getGlobalScope() {
+        return globalScope;
     }
 
     /**
-     * Adds an {@code $OPTIONS} property to the global object that exposes several options to the
-     * script, in case scripting mode is enabled. (for Nashorn compatibility).
+     * Adds several objects to the global object, in case scripting mode is enabled (for Nashorn
+     * compatibility). This includes an {@code $OPTIONS} property that exposes several options to
+     * the script, an {@code $ARG} array with arguments to the script, and an {@code $ENV} object
+     * with environment variables.
      */
-    public void addScriptingOptionsObject() {
+    public void addScriptingObjects() {
         CompilerAsserts.neverPartOfCompilation();
         if (!JSTruffleOptions.NashornExtensions) {
             return;
         }
-        String optionsObjName = "$OPTIONS";
-        boolean scripting = true; // $OPTIONS only created in scripting mode
-        String timezone = context.getLocalTimeZoneId().getId();
         DynamicObject globalObj = getGlobalObject();
 
-        if (!JSObject.hasOwnProperty(globalObj, optionsObjName)) {
-            DynamicObject optionsObj = JSUserObject.create(context);
-            DynamicObject timezoneObj = JSUserObject.create(context);
+        String timezone = context.getLocalTimeZoneId().getId();
+        DynamicObject timezoneObj = JSUserObject.create(context);
+        JSObjectUtil.putDataProperty(context, timezoneObj, "ID", timezone, JSAttributes.configurableEnumerableWritable());
 
-            JSObjectUtil.putDataProperty(context, timezoneObj, "ID", timezone, JSAttributes.notConfigurableNotEnumerableNotWritable());
+        DynamicObject optionsObj = JSUserObject.create(context);
+        JSObjectUtil.putDataProperty(context, optionsObj, "_timezone", timezoneObj, JSAttributes.configurableEnumerableWritable());
+        JSObjectUtil.putDataProperty(context, optionsObj, "_scripting", true, JSAttributes.configurableEnumerableWritable());
+        JSObjectUtil.putDataProperty(context, optionsObj, "_compile_only", false, JSAttributes.configurableEnumerableWritable());
 
-            JSObjectUtil.putDataProperty(context, optionsObj, "_timezone", timezoneObj, JSAttributes.notConfigurableNotEnumerableNotWritable());
-            JSObjectUtil.putDataProperty(context, optionsObj, "_scripting", scripting, JSAttributes.notConfigurableNotEnumerableNotWritable());
-            JSObjectUtil.putDataProperty(context, optionsObj, "_compile_only", false, JSAttributes.notConfigurableNotEnumerableNotWritable());
+        JSObjectUtil.putOrSetDataProperty(context, globalObj, "$OPTIONS", optionsObj, JSAttributes.configurableNotEnumerableWritable());
 
-            JSObjectUtil.putDataProperty(context, globalObj, optionsObjName, optionsObj, JSAttributes.notConfigurableNotEnumerableNotWritable());
+        DynamicObject argObj = JSArray.createConstant(context, getEnv().getApplicationArguments());
+        JSObjectUtil.putOrSetDataProperty(context, globalObj, "$ARG", argObj, JSAttributes.configurableNotEnumerableWritable());
+
+        DynamicObject envObj = JSUserObject.create(context);
+        Map<String, String> sysenv = System.getenv();
+        for (Map.Entry<String, String> entry : sysenv.entrySet()) {
+            JSObjectUtil.putDataProperty(context, envObj, entry.getKey(), entry.getValue(), JSAttributes.configurableEnumerableWritable());
         }
+        JSObjectUtil.putOrSetDataProperty(context, globalObj, "$ENV", envObj, JSAttributes.configurableNotEnumerableWritable());
     }
 
     public void setRealmBuiltinObject(DynamicObject realmBuiltinObject) {
@@ -1449,7 +1464,7 @@ public class JSRealm implements ShapeContext {
     }
 
     public void setArguments(Object[] arguments) {
-        JSObjectUtil.putDataProperty(context, getGlobalObject(), ARGUMENTS_NAME, JSArray.createConstant(context, arguments),
+        JSObjectUtil.putOrSetDataProperty(context, getGlobalObject(), ARGUMENTS_NAME, JSArray.createConstant(context, arguments),
                         context.isOptionV8CompatibilityMode() ? JSAttributes.getDefault() : JSAttributes.getDefaultNotEnumerable());
     }
 
@@ -1482,7 +1497,7 @@ public class JSRealm implements ShapeContext {
         TruffleContext nestedContext = getEnv().newContextBuilder().build();
         Object prev = nestedContext.enter();
         try {
-            JSRealm childRealm = AbstractJavaScriptLanguage.findCurrentJSRealm();
+            JSRealm childRealm = AbstractJavaScriptLanguage.getCurrentJSRealm();
             // "Realm" object is shared by all realms (V8 compatibility mode)
             childRealm.setRealmBuiltinObject(getRealmBuiltinObject());
             return childRealm;

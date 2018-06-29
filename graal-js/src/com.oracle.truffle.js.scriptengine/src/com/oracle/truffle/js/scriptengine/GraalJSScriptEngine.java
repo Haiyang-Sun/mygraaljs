@@ -67,7 +67,7 @@ import org.graalvm.polyglot.proxy.Proxy;
  * A Graal.JS implementation of the script engine. It provides access to the polyglot context using
  * {@link #getPolyglotContext()}.
  */
-public final class GraalJSScriptEngine extends AbstractScriptEngine implements Compilable, Invocable {
+public final class GraalJSScriptEngine extends AbstractScriptEngine implements Compilable, Invocable, AutoCloseable {
 
     private static final String ID = "js";
     private static final String POLYGLOT_CONTEXT = "polyglot.context";
@@ -77,6 +77,8 @@ public final class GraalJSScriptEngine extends AbstractScriptEngine implements C
 
     private final GraalJSEngineFactory factory;
     private final Context.Builder contextConfig;
+
+    private volatile boolean closed;
 
     GraalJSScriptEngine(GraalJSEngineFactory factory) {
         this(factory.getPolyglotEngine(), null);
@@ -104,15 +106,20 @@ public final class GraalJSScriptEngine extends AbstractScriptEngine implements C
         Context.Builder builder = this.contextConfig;
         builder.in(in).out(out).err(err);
         Context ctx = builder.build();
-        Value global = evalInternal(ctx, "this");
-        evalInternal(ctx, "Object.defineProperty(this,'arguments',{enumerable:false,iterable:false})");
-        evalInternal(ctx, "Object.defineProperty(this,'__engine',{enumerable:false,iterable:false})");
-        global.putMember("arguments", evalInternal(ctx, "new Array(0)"));
-        global.putMember("__engine", this);
         ctx.getPolyglotBindings().putMember(OUT_SYMBOL, out);
         ctx.getPolyglotBindings().putMember(ERR_SYMBOL, err);
         ctx.getPolyglotBindings().putMember(IN_SYMBOL, in);
         return ctx;
+    }
+
+    /**
+     * Closes the current context and makes it unusable. Opertions performed after closing will
+     * throw an {@link IllegalStateException}.
+     */
+    @Override
+    public void close() {
+        getPolyglotContext().close();
+        closed = true;
     }
 
     /**
@@ -231,7 +238,7 @@ public final class GraalJSScriptEngine extends AbstractScriptEngine implements C
         if (function == null) {
             throw new NoSuchMethodException(methodName);
         } else if (!function.canExecute()) {
-            throw new NoSuchMethodException(methodName + " is not a fucntion");
+            throw new NoSuchMethodException(methodName + " is not a function");
         }
         try {
             return function.execute(args).as(Object.class);
@@ -252,6 +259,9 @@ public final class GraalJSScriptEngine extends AbstractScriptEngine implements C
 
     @Override
     public CompiledScript compile(String script) throws ScriptException {
+        if (closed) {
+            throw new IllegalStateException("Context already closed.");
+        }
         Source source = createSource(script);
         return new CompiledScript() {
             @Override
@@ -268,6 +278,9 @@ public final class GraalJSScriptEngine extends AbstractScriptEngine implements C
 
     @Override
     public CompiledScript compile(Reader reader) throws ScriptException {
+        if (closed) {
+            throw new IllegalStateException("Context already closed.");
+        }
         Source source = createSource(reader);
         return new CompiledScript() {
             @Override

@@ -104,6 +104,9 @@ public final class Options {
     }
 
     public static class OptionsParser extends AbstractLanguageLauncher implements Function<String[], Object[]> {
+        private static final String INSPECT = "inspect";
+        private static final String INSPECT_SUSPEND = "inspect.Suspend";
+        private static final String INSPECT_WAIT_ATTACHED = "inspect.WaitAttached";
 
         private Context.Builder contextBuilder;
         private boolean exposeGC;
@@ -188,15 +191,19 @@ public final class Options {
                     exposeGC = true;
                     continue;
                 }
+                if (INSPECT_SUSPEND.equals(key)) {
+                    polyglotOptions.put(INSPECT_SUSPEND, valueOrTrue(value));
+                    continue;
+                }
                 // Convert --inspect[=port] to --inspect[=port] plus --inspect.Suspend=false
-                if ("inspect".equals(key)) {
+                if (INSPECT.equals(key)) {
                     // Do not override port (from --inspect-brk=)
-                    if (value != null || !polyglotOptions.containsKey("inspect")) {
-                        unprocessedArguments.add(arg);
+                    if (value != null || !polyglotOptions.containsKey(INSPECT)) {
+                        polyglotOptions.put(key, valueOrTrue(value));
                     }
                     // Do not override inspect.Suspend=true
-                    if (!polyglotOptions.containsKey("inspect.Suspend")) {
-                        unprocessedArguments.add("--inspect.Suspend=false");
+                    if (!polyglotOptions.containsKey(INSPECT_SUSPEND)) {
+                        polyglotOptions.put(INSPECT_SUSPEND, "false");
                     }
                     continue;
                 }
@@ -204,14 +211,14 @@ public final class Options {
                 // --inspect.WaitAttached=true
                 if ("inspect-brk".equals(normalizedKey) || "debug-brk".equals(normalizedKey)) {
                     // Do not override port (from --inspect=)
-                    if (value != null || !polyglotOptions.containsKey("inspect")) {
-                        unprocessedArguments.add("--inspect" + (value == null ? "" : "=" + value));
+                    if (value != null || !polyglotOptions.containsKey(INSPECT)) {
+                        polyglotOptions.put(INSPECT, valueOrTrue(value));
                     }
                     // Do not override inspect.Suspend=true
-                    if (!polyglotOptions.containsKey("inspect.Suspend")) {
-                        unprocessedArguments.add("--inspect.Suspend=false");
+                    if (!polyglotOptions.containsKey(INSPECT_SUSPEND)) {
+                        polyglotOptions.put(INSPECT_SUSPEND, "false");
                     }
-                    unprocessedArguments.add("--inspect.WaitAttached=true");
+                    polyglotOptions.put(INSPECT_WAIT_ATTACHED, "true");
                     continue;
                 }
                 if ("prof".equals(key)) {
@@ -221,6 +228,10 @@ public final class Options {
                 unprocessedArguments.add(arg);
             }
             return unprocessedArguments;
+        }
+
+        private static String valueOrTrue(String value) {
+            return (value == null) ? "true" : value;
         }
 
         @Override
@@ -248,11 +259,14 @@ public final class Options {
             System.out.println();
             System.out.println("Usage: node [options] [ -e script | script.js ] [arguments]\n");
             System.out.println("Basic Options:");
+            printOption("-v, --version",         "print version");
             printOption("-e, --eval script",     "evaluate script");
             printOption("-p, --print",           "evaluate script and print result");
             printOption("-c, --check",           "syntax check script without executing");
             printOption("-i, --interactive",     "always enter the REPL even if stdin does not appear to be a terminal");
             printOption("-r, --require",         "module to preload (option can be repeated)");
+            printOption("--inspect[=port]",      "activate inspector on port (overrides options of Chrome Inspector)");
+            printOption("--inspect-brk[=port]",  "activate inspector on port and break at start of user script (overrides options of Chrome Inspector)");
         }
 
         private static void printOption(String option, String description) {

@@ -52,6 +52,8 @@ import com.oracle.truffle.js.nodes.ReadNode;
 import com.oracle.truffle.js.nodes.RepeatableNode;
 import com.oracle.truffle.js.nodes.instrumentation.JSTags;
 import com.oracle.truffle.js.nodes.instrumentation.JSTags.ReadVariableExpressionTag;
+import com.oracle.truffle.js.nodes.instrumentation.JSTags.WriteVariableExpressionTag;
+import com.oracle.truffle.js.nodes.instrumentation.NodeObjectDescriptor;
 import com.oracle.truffle.js.runtime.builtins.JSArgumentsObject;
 import com.oracle.truffle.js.runtime.objects.Undefined;
 
@@ -73,6 +75,16 @@ public abstract class JSGuardDisconnectedArgumentRead extends JavaScriptNode imp
         return JSGuardDisconnectedArgumentReadNodeGen.create(index, readElementNode, argumentsArray, slot);
     }
 
+    @Specialization(guards = "!isArgumentsDisconnected(argumentsArray)")
+    public Object doObject(DynamicObject argumentsArray, @Cached("createBinaryProfile()") ConditionProfile unconnectedProfile) {
+        assert JSArgumentsObject.isJSArgumentsObject(argumentsArray);
+        if (unconnectedProfile.profile(index >= JSArgumentsObject.getConnectedArgumentCount(argumentsArray))) {
+            return Undefined.instance;
+        } else {
+            return readElementNode.executeWithTargetAndIndex(argumentsArray, index);
+        }
+    }
+
     @Override
     public boolean hasTag(Class<? extends Tag> tag) {
         if (tag == ReadVariableExpressionTag.class) {
@@ -84,17 +96,10 @@ public abstract class JSGuardDisconnectedArgumentRead extends JavaScriptNode imp
 
     @Override
     public Object getNodeObject() {
-        return JSTags.createNodeObjectDescriptor("name", slot.getIdentifier());
-    }
-
-    @Specialization(guards = "!isArgumentsDisconnected(argumentsArray)")
-    public Object doObject(DynamicObject argumentsArray, @Cached("createBinaryProfile()") ConditionProfile unconnectedProfile) {
-        assert JSArgumentsObject.isJSArgumentsObject(argumentsArray);
-        if (unconnectedProfile.profile(index >= JSArgumentsObject.getConnectedArgumentCount(argumentsArray))) {
-            return Undefined.instance;
-        } else {
-            return readElementNode.executeWithTargetAndIndex(argumentsArray, index);
-        }
+        assert (argumentsArrayNode instanceof JSReadFrameSlotNode);
+        NodeObjectDescriptor desc = JSTags.createNodeObjectDescriptor("argsnode", argumentsArrayNode);
+        desc.addProperty("name", this.index);
+        return desc;
     }
 
     public final int getIndex() {

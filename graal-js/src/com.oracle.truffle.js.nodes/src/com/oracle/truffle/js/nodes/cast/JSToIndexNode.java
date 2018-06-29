@@ -45,6 +45,7 @@ import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.object.DynamicObject;
 import com.oracle.truffle.api.profiles.BranchProfile;
 import com.oracle.truffle.js.nodes.JavaScriptBaseNode;
+import com.oracle.truffle.js.runtime.BigInt;
 import com.oracle.truffle.js.runtime.Errors;
 import com.oracle.truffle.js.runtime.JSRuntime;
 
@@ -89,6 +90,11 @@ public abstract class JSToIndexNode extends JavaScriptBaseNode {
             tooLargeIndexBranch.enter();
             throw Errors.createRangeError("index is too large");
         }
+    }
+
+    @Specialization
+    protected long doBigInt(@SuppressWarnings("unused") BigInt value) {
+        throw Errors.createTypeErrorCannotConvertToNumber("a BigInt value", this);
     }
 
     @Specialization

@@ -250,30 +250,30 @@ public final class GraalJSAccess {
 
     private final List<Reference<FunctionTemplate>> functionTemplates = new ArrayList<>();
 
-    private boolean exposeGC;
+    private final boolean exposeGC;
 
     // static accessors to JSRegExp properties (usually via nodes)
     private static final TRegexUtil.TRegexCompiledRegexAccessor STATIC_COMPILED_REGEX_ACCESSOR = TRegexUtil.TRegexCompiledRegexAccessor.create();
     private static final TRegexUtil.TRegexFlagsAccessor STATIC_FLAGS_ACCESSOR = TRegexUtil.TRegexFlagsAccessor.create();
 
     private GraalJSAccess(String[] args, long loopAddress) throws Exception {
-        Options options = null;
-        Context.Builder contextBuilder = null;
         try {
-            options = Options.parseArguments(prepareArguments(args));
-            contextBuilder = options.getContextBuilder();
+            Options options = Options.parseArguments(prepareArguments(args));
+            Context.Builder contextBuilder = options.getContextBuilder();
+
+            contextBuilder.option(JSContextOptions.DIRECT_BYTE_BUFFER_NAME, "true");
+            contextBuilder.option(JSContextOptions.V8_COMPATIBILITY_MODE_NAME, "true");
+            contextBuilder.option(JSContextOptions.INTL_402_NAME, "true");
+            contextBuilder.option(GraalJSParserOptions.SYNTAX_EXTENSIONS_NAME, "false");
+
+            exposeGC = options.isGCExposed();
+            evaluator = contextBuilder.build();
         } catch (IllegalArgumentException iaex) {
-            System.err.println(iaex.getMessage());
+            System.err.printf("ERROR: %s", iaex.getMessage());
             System.exit(1);
+            throw iaex; // avoids compiler complaints that final fields are not initialized
         }
 
-        contextBuilder.option(JSContextOptions.DIRECT_BYTE_BUFFER_NAME, "true");
-        contextBuilder.option(JSContextOptions.V8_COMPATIBILITY_MODE_NAME, "true");
-        contextBuilder.option(JSContextOptions.INTL_402_NAME, "true");
-        contextBuilder.option(GraalJSParserOptions.SYNTAX_EXTENSIONS_NAME, "false");
-
-        exposeGC = options.isGCExposed();
-        evaluator = contextBuilder.build();
         JSRealm mainJSRealm = JavaScriptLanguage.getJSRealm(evaluator);
         mainJSContext = mainJSRealm.getContext();
         assert mainJSContext != null : "JSContext initialized";
@@ -1033,7 +1033,52 @@ public final class GraalJSAccess {
     }
 
     public Object functionCall(Object function, Object receiver, Object[] arguments) {
-        return JSRuntime.call(function, receiver, arguments);
+        Object value = JSRuntime.call(function, receiver, arguments);
+        Object flatten = valueFlatten(value);
+        resetSharedBuffer();
+        sharedBuffer.position(4);
+        sharedBuffer.putInt(0, valueType(flatten, true));
+        return flatten;
+    }
+
+    public Object functionCall0(Object function, Object receiver) {
+        return functionCall(function, receiver, JSArguments.EMPTY_ARGUMENTS_ARRAY);
+    }
+
+    public Object functionCall1(Object function, Object receiver, Object arg0) {
+        return functionCall(function, receiver, new Object[]{arg0});
+    }
+
+    public Object functionCall2(Object function, Object receiver, Object arg0, Object arg1) {
+        return functionCall(function, receiver, new Object[]{arg0, arg1});
+    }
+
+    public Object functionCall3(Object function, Object receiver, Object arg0, Object arg1, Object arg2) {
+        return functionCall(function, receiver, new Object[]{arg0, arg1, arg2});
+    }
+
+    public Object functionCall4(Object function, Object receiver, Object arg0, Object arg1, Object arg2, Object arg3) {
+        return functionCall(function, receiver, new Object[]{arg0, arg1, arg2, arg3});
+    }
+
+    public Object functionCall5(Object function, Object receiver, Object arg0, Object arg1, Object arg2, Object arg3, Object arg4) {
+        return functionCall(function, receiver, new Object[]{arg0, arg1, arg2, arg3, arg4});
+    }
+
+    public Object functionCall6(Object function, Object receiver, Object arg0, Object arg1, Object arg2, Object arg3, Object arg4, Object arg5) {
+        return functionCall(function, receiver, new Object[]{arg0, arg1, arg2, arg3, arg4, arg5});
+    }
+
+    public Object functionCall7(Object function, Object receiver, Object arg0, Object arg1, Object arg2, Object arg3, Object arg4, Object arg5, Object arg6) {
+        return functionCall(function, receiver, new Object[]{arg0, arg1, arg2, arg3, arg4, arg5, arg6});
+    }
+
+    public Object functionCall8(Object function, Object receiver, Object arg0, Object arg1, Object arg2, Object arg3, Object arg4, Object arg5, Object arg6, Object arg7) {
+        return functionCall(function, receiver, new Object[]{arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7});
+    }
+
+    public Object functionCall9(Object function, Object receiver, Object arg0, Object arg1, Object arg2, Object arg3, Object arg4, Object arg5, Object arg6, Object arg7, Object arg8) {
+        return functionCall(function, receiver, new Object[]{arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8});
     }
 
     private static SourceSection functionGetSourceSection(Object function) {
@@ -2024,8 +2069,8 @@ public final class GraalJSAccess {
     }
 
     public long contextGetPointerInEmbedderData(Object context, int index) {
-        long pointer = (Long) contextGetEmbedderData(context, index);
-        return pointer;
+        Long pointer = (Long) contextGetEmbedderData(context, index);
+        return (pointer == null) ? 0 : pointer;
     }
 
     public void contextSetEmbedderData(Object realm, int index, Object value) {

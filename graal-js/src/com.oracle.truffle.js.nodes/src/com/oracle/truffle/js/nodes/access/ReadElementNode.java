@@ -505,6 +505,7 @@ public class ReadElementNode extends JSTargetableNode implements ReadNode {
         @Child private ToArrayIndexNode toArrayIndexNode;
         @Child private ArrayReadElementCacheNode arrayReadElementNode;
         @Child private JSObjectReadElementNonArrayTypeCacheNode nonArrayCaseNode;
+        @Child private IsObjectNode isObjectNode;
         private final ConditionProfile arrayProfile = ConditionProfile.createBinaryProfile();
         private final ConditionProfile arrayIndexProfile = ConditionProfile.createBinaryProfile();
         private final JSClassProfile jsclassProfile = JSClassProfile.create();
@@ -513,6 +514,7 @@ public class ReadElementNode extends JSTargetableNode implements ReadNode {
             super(context);
             this.isArrayNode = IsArrayNode.createIsAnyArray();
             this.toArrayIndexNode = ToArrayIndexNode.create();
+            this.isObjectNode = IsObjectNode.createIncludeNullUndefined();
         }
 
         @Override
@@ -633,7 +635,7 @@ public class ReadElementNode extends JSTargetableNode implements ReadNode {
 
         @Override
         public boolean guard(Object target) {
-            return JSObject.isDynamicObject(target);
+            return isObjectNode.executeBoolean(target);
         }
 
         private Object getProperty(DynamicObject targetObject, Object objIndex) {
@@ -688,9 +690,9 @@ public class ReadElementNode extends JSTargetableNode implements ReadNode {
         private Object getCachedProperty(DynamicObject targetObject, Object index) {
             if (getPropertyCachedNode == null) {
                 CompilerDirectives.transferToInterpreterAndInvalidate();
-                getPropertyCachedNode = insert(CachedGetPropertyNode.create(context, index));
+                getPropertyCachedNode = insert(CachedGetPropertyNode.create(context));
             }
-            return getPropertyCachedNode.getCachedProperty(targetObject, index);
+            return getPropertyCachedNode.execute(targetObject, index);
         }
     }
 
@@ -1490,7 +1492,7 @@ public class ReadElementNode extends JSTargetableNode implements ReadNode {
         TruffleObjectReadElementTypeCacheNode(JSContext context, Class<? extends TruffleObject> targetClass) {
             super(context);
             this.targetClass = targetClass;
-            this.convert = ExportValueNodeGen.create();
+            this.convert = ExportValueNodeGen.create(context);
             this.foreignIsNull = Message.IS_NULL.createNode();
             this.foreignArrayAccess = Message.READ.createNode();
         }

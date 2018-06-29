@@ -49,13 +49,13 @@ import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.interop.ForeignAccess;
 import com.oracle.truffle.api.interop.Message;
 import com.oracle.truffle.api.interop.TruffleObject;
-import com.oracle.truffle.api.interop.java.JavaInterop;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.object.DynamicObject;
 import com.oracle.truffle.js.nodes.JSGuards;
 import com.oracle.truffle.js.nodes.JavaScriptBaseNode;
 import com.oracle.truffle.js.nodes.access.PropertyGetNode;
 import com.oracle.truffle.js.nodes.function.JSFunctionCallNode;
+import com.oracle.truffle.js.runtime.BigInt;
 import com.oracle.truffle.js.runtime.Errors;
 import com.oracle.truffle.js.runtime.JSArguments;
 import com.oracle.truffle.js.runtime.JSContext;
@@ -63,6 +63,7 @@ import com.oracle.truffle.js.runtime.JSRuntime;
 import com.oracle.truffle.js.runtime.JSTruffleOptions;
 import com.oracle.truffle.js.runtime.Symbol;
 import com.oracle.truffle.js.runtime.builtins.JSArray;
+import com.oracle.truffle.js.runtime.builtins.JSBigInt;
 import com.oracle.truffle.js.runtime.builtins.JSBoolean;
 import com.oracle.truffle.js.runtime.builtins.JSClass;
 import com.oracle.truffle.js.runtime.builtins.JSFunction;
@@ -129,6 +130,8 @@ public abstract class JSONStringifyStringNode extends JavaScriptBaseNode {
             jsonQuote(builder, value.toString());
         } else if (JSRuntime.isNumber(value)) {
             appendNumber(builder, (Number) value);
+        } else if (JSRuntime.isBigInt(value)) {
+            throw Errors.createTypeError("Do not know how to serialize a BigInt");
         } else if (JSObject.isJSObject(value) && !JSRuntime.isCallable(value)) {
             TruffleObject valueObj = (TruffleObject) value;
             if (JSRuntime.isArray(valueObj)) {
@@ -138,7 +141,7 @@ public abstract class JSONStringifyStringNode extends JavaScriptBaseNode {
             }
         } else if (value instanceof TruffleObject) {
             jsonTruffleObject(builder, data, (TruffleObject) value);
-        } else if (JSTruffleOptions.NashornJavaInterop || JavaInterop.isPrimitive(value)) {
+        } else if (JSTruffleOptions.NashornJavaInterop || JSRuntime.isJavaPrimitive(value)) {
             // call toString on Java objects, GR-3722
             jsonQuote(builder, value.toString());
         } else {
@@ -203,7 +206,11 @@ public abstract class JSONStringifyStringNode extends JavaScriptBaseNode {
         if (JSRuntime.isObject(value)) {
             DynamicObject valueObj = (DynamicObject) value;
             value = jsonStrPrepareObject(JSRuntime.toPropertyKey(key), value, valueObj);
+        } else if (JSRuntime.isBigInt(value)) {
+            DynamicObject valueObj = JSBigInt.create(this.context, (BigInt) value);
+            value = jsonStrPrepareObject(JSRuntime.toPropertyKey(key), value, valueObj);
         }
+
         if (data.getReplacerFnObj() != null) {
             value = JSRuntime.call(data.getReplacerFnObj(), holder, new Object[]{JSRuntime.toPropertyKey(key), value});
         }
@@ -219,6 +226,8 @@ public abstract class JSONStringifyStringNode extends JavaScriptBaseNode {
         JSClass builtinClass = JSObject.getJSClass(valueObj);
         if (builtinClass == JSNumber.INSTANCE) {
             return JSRuntime.toNumber(valueObj);
+        } else if (builtinClass == JSBigInt.INSTANCE) {
+            return JSBigInt.valueOf(valueObj);
         } else if (builtinClass == JSString.INSTANCE) {
             return JSRuntime.toString(valueObj);
         } else if (builtinClass == JSBoolean.INSTANCE) {
@@ -494,5 +503,4 @@ public abstract class JSONStringifyStringNode extends JavaScriptBaseNode {
         }
         return ForeignAccess.sendIsBoxed(isBoxedNode, obj);
     }
-
 }

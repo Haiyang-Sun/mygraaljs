@@ -48,6 +48,7 @@ import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.frame.Frame;
 import com.oracle.truffle.api.frame.FrameDescriptor;
 import com.oracle.truffle.api.frame.FrameSlot;
+import com.oracle.truffle.api.frame.FrameSlotKind;
 import com.oracle.truffle.api.frame.MaterializedFrame;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.source.SourceSection;
@@ -69,6 +70,8 @@ import com.oracle.truffle.js.nodes.access.GetTemplateObjectNode;
 import com.oracle.truffle.js.nodes.access.GlobalDeclarationInstantiationNode;
 import com.oracle.truffle.js.nodes.access.GlobalObjectNode;
 import com.oracle.truffle.js.nodes.access.GlobalPropertyNode;
+import com.oracle.truffle.js.nodes.access.GlobalScopeNode;
+import com.oracle.truffle.js.nodes.access.GlobalScopeVarWrapperNode;
 import com.oracle.truffle.js.nodes.access.IteratorCloseNode;
 import com.oracle.truffle.js.nodes.access.IteratorCompleteUnaryNode;
 import com.oracle.truffle.js.nodes.access.IteratorNextUnaryNode;
@@ -134,6 +137,7 @@ import com.oracle.truffle.js.nodes.binary.JSSubtractNode;
 import com.oracle.truffle.js.nodes.binary.JSTypeofIdenticalNode;
 import com.oracle.truffle.js.nodes.binary.JSUnsignedRightShiftNode;
 import com.oracle.truffle.js.nodes.cast.JSPrepareThisNode;
+import com.oracle.truffle.js.nodes.cast.JSToNumericNode;
 import com.oracle.truffle.js.nodes.cast.JSToObjectNode;
 import com.oracle.truffle.js.nodes.cast.JSToPropertyKeyNode.JSToPropertyKeyWrapperNode;
 import com.oracle.truffle.js.nodes.cast.JSToStringNode.JSToStringWrapperNode;
@@ -276,8 +280,8 @@ public class NodeFactory {
         }
     }
 
-    public JavaScriptNode createUnaryPlus(JavaScriptNode operand) {
-        return JSUnaryPlusNode.create(operand);
+    public JavaScriptNode numericConversion(JavaScriptNode operand) {
+        return JSToNumericNode.create(operand);
     }
 
     public JavaScriptNode createDual(JSContext context, JavaScriptNode left, JavaScriptNode right) {
@@ -393,6 +397,10 @@ public class NodeFactory {
         return JSConstantNode.createInt(value);
     }
 
+    public JavaScriptNode createConstantNumericUnit() {
+        return JSConstantNode.createConstantNumericUnit();
+    }
+
     public JavaScriptNode createConstantDouble(double value) {
         return JSConstantNode.createDouble(value);
     }
@@ -433,14 +441,14 @@ public class NodeFactory {
     }
 
     public IterationScopeNode createIterationScope(FrameDescriptor frameDescriptor) {
-        assert frameDescriptor.getSize() > 0 && frameDescriptor.getSlots().get(0) == ScopeFrameNode.PARENT_SCOPE_SLOT;
+        assert frameDescriptor.getSize() > 0 && frameDescriptor.getSlots().get(0).getIdentifier() == ScopeFrameNode.PARENT_SCOPE_IDENTIFIER;
         List<? extends FrameSlot> slots = frameDescriptor.getSlots();
         JSReadFrameSlotNode[] reads = new JSReadFrameSlotNode[slots.size()];
         JSWriteFrameSlotNode[] writes = new JSWriteFrameSlotNode[slots.size()];
         for (int i = 0; i < slots.size(); i++) {
             FrameSlot slot = slots.get(i);
-            reads[i] = JSReadFrameSlotNode.create(slot, 0, 0, false);
-            writes[i] = JSWriteFrameSlotNode.create(slot, 0, 0, null, false);
+            reads[i] = JSReadFrameSlotNode.create(slot, 0, 0, ScopeFrameNode.EMPTY_FRAME_SLOT_ARRAY, false);
+            writes[i] = JSWriteFrameSlotNode.create(slot, 0, 0, ScopeFrameNode.EMPTY_FRAME_SLOT_ARRAY, null, false);
         }
         return IterationScopeNode.create(frameDescriptor, reads, writes);
     }
@@ -489,28 +497,39 @@ public class NodeFactory {
         return DebuggerNode.create();
     }
 
-    public JavaScriptNode createLocal(FrameSlot frameSlot, int frameLevel, int scopeLevel) {
-        return createLocal(frameSlot, frameLevel, scopeLevel, false);
+    public JavaScriptNode createLocal(FrameSlot frameSlot, int frameLevel, int scopeLevel, FrameSlot[] parentSlots) {
+        return createLocal(frameSlot, frameLevel, scopeLevel, parentSlots, false);
     }
 
-    public JavaScriptNode createLocal(FrameSlot frameSlot, int frameLevel, int scopeLevel, boolean hasTemporalDeadZone) {
-        return JSReadFrameSlotNode.create(frameSlot, frameLevel, scopeLevel, hasTemporalDeadZone);
+    public JavaScriptNode createLocal(FrameSlot frameSlot, int frameLevel, int scopeLevel, FrameSlot[] parentSlots, boolean hasTemporalDeadZone) {
+        return JSReadFrameSlotNode.create(frameSlot, frameLevel, scopeLevel, parentSlots, hasTemporalDeadZone);
     }
 
-    public JSWriteFrameSlotNode createWriteFrameSlot(FrameSlot frameSlot, int frameLevel, int scopeLevel, JavaScriptNode rhs) {
-        return JSWriteFrameSlotNode.create(frameSlot, frameLevel, scopeLevel, rhs, false);
+    public JSWriteFrameSlotNode createWriteFrameSlot(FrameSlot frameSlot, int frameLevel, int scopeLevel, FrameSlot[] parentSlots, JavaScriptNode rhs) {
+        return JSWriteFrameSlotNode.create(frameSlot, frameLevel, scopeLevel, parentSlots, rhs, false);
     }
 
-    public JSWriteFrameSlotNode createWriteFrameSlot(FrameSlot frameSlot, int frameLevel, int scopeLevel, JavaScriptNode rhs, boolean hasTemporalDeadZone) {
-        return JSWriteFrameSlotNode.create(frameSlot, frameLevel, scopeLevel, rhs, hasTemporalDeadZone);
+    public JSWriteFrameSlotNode createWriteFrameSlot(FrameSlot frameSlot, int frameLevel, int scopeLevel, FrameSlot[] parentSlots, JavaScriptNode rhs, boolean hasTemporalDeadZone) {
+        return JSWriteFrameSlotNode.create(frameSlot, frameLevel, scopeLevel, parentSlots, rhs, hasTemporalDeadZone);
     }
 
-    public JavaScriptNode createReadGlobal(FrameSlot frameSlot, boolean hasTemporalDeadZone, JSContext context) {
-        return JSReadFrameSlotNode.create(frameSlot, ScopeFrameNode.createGlobalScope(context), hasTemporalDeadZone);
+    public JavaScriptNode createReadLexicalGlobal(String name, boolean hasTemporalDeadZone, JSContext context) {
+        return GlobalPropertyNode.createLexicalGlobal(context, name, hasTemporalDeadZone);
     }
 
-    public JavaScriptNode createWriteGlobal(FrameSlot frameSlot, JavaScriptNode rhs, boolean hasTemporalDeadZone, JSContext context) {
-        return JSWriteFrameSlotNode.create(frameSlot, ScopeFrameNode.createGlobalScope(context), rhs, hasTemporalDeadZone);
+    public JavaScriptNode createGlobalScope(JSContext context) {
+        return GlobalScopeNode.create(context);
+    }
+
+    public JavaScriptNode createGlobalScopeTDZCheck(JSContext context, String name, boolean checkTDZ) {
+        if (!checkTDZ) {
+            return createGlobalScope(context);
+        }
+        return GlobalScopeNode.createWithTDZCheck(context, name);
+    }
+
+    public JavaScriptNode createGlobalVarWrapper(JSContext context, String varName, JavaScriptNode defaultDelegate, JavaScriptNode dynamicScope, JSTargetableNode scopeAccessNode) {
+        return new GlobalScopeVarWrapperNode(context, varName, defaultDelegate, dynamicScope, scopeAccessNode);
     }
 
     public JavaScriptNode createThrow(JavaScriptNode expression) {
@@ -542,6 +561,8 @@ public class NodeFactory {
             JavaScriptNode function = expression;
             if (function instanceof GlobalPropertyNode) {
                 ((GlobalPropertyNode) function).setMethod();
+            } else if (function instanceof GlobalScopeVarWrapperNode) {
+                ((GlobalScopeVarWrapperNode) function).setMethod();
             }
             return JSFunctionCallNode.create(function, target, JSFunctionArgumentsNode.create(arguments), false, false);
         }
@@ -554,8 +575,8 @@ public class NodeFactory {
         return JSFunctionCallNode.create(function, target, JSFunctionArgumentsNode.create(arguments), false, true);
     }
 
-    public JavaScriptNode createNew(@SuppressWarnings("unused") JSContext context, JavaScriptNode function, JavaScriptNode[] arguments) {
-        return JSNewNode.create(function, JSFunctionArgumentsNode.create(arguments));
+    public JavaScriptNode createNew(JSContext context, JavaScriptNode function, JavaScriptNode[] arguments) {
+        return JSNewNode.create(context, function, JSFunctionArgumentsNode.create(arguments));
     }
 
     // ##### Argument nodes
@@ -636,8 +657,8 @@ public class NodeFactory {
         return GlobalPropertyNode.createPropertyNode(context, name);
     }
 
-    public JSTargetableNode createDeleteProperty(JavaScriptNode target, JavaScriptNode property, boolean strictMode) {
-        return DeletePropertyNode.create(target, property, strictMode);
+    public JSTargetableNode createDeleteProperty(JavaScriptNode target, JavaScriptNode property, boolean strictMode, JSContext context) {
+        return DeletePropertyNode.create(target, property, strictMode, context);
     }
 
     // ##### Function nodes
@@ -710,8 +731,8 @@ public class NodeFactory {
         return ObjectLiteralNode.newDataMember(keyName, isStatic, enumerable, value);
     }
 
-    public ObjectLiteralMemberNode createProtoMember(String keyName, boolean isStatic, boolean enumerable, JavaScriptNode value) {
-        return ObjectLiteralNode.newProtoMember(keyName, isStatic, enumerable, value);
+    public ObjectLiteralMemberNode createProtoMember(String keyName, boolean isStatic, JavaScriptNode value) {
+        return ObjectLiteralNode.newProtoMember(keyName, isStatic, value);
     }
 
     public ObjectLiteralMemberNode createComputedDataMember(JavaScriptNode key, boolean isStatic, boolean enumerable, JavaScriptNode value) {
@@ -722,8 +743,8 @@ public class NodeFactory {
         return ObjectLiteralNode.newComputedAccessorMember(key, isStatic, enumerable, getter, setter);
     }
 
-    public ObjectLiteralMemberNode createSpreadObjectMember(boolean isStatic, boolean enumerable, JavaScriptNode value) {
-        return ObjectLiteralNode.newSpreadObjectMember(isStatic, enumerable, value);
+    public ObjectLiteralMemberNode createSpreadObjectMember(boolean isStatic, JavaScriptNode value) {
+        return ObjectLiteralNode.newSpreadObjectMember(isStatic, value);
     }
 
     public JavaScriptNode createClassDefinition(JSContext context, JSFunctionExpressionNode constructorFunction, JavaScriptNode classHeritage, ObjectLiteralMemberNode[] members, String className) {
@@ -782,8 +803,8 @@ public class NodeFactory {
         return AsyncGeneratorYieldNode.createYieldStar(context, expression, asyncContextNode, asyncResultNode, returnNode, readTemp, writeTemp);
     }
 
-    public JavaScriptNode createAsyncFunctionBody(JSContext context, JavaScriptNode parameterInit, JavaScriptNode body, JSWriteFrameSlotNode asyncContext, JSWriteFrameSlotNode asyncResult) {
-        return AsyncFunctionBodyNode.create(context, parameterInit, body, asyncContext, asyncResult);
+    public JavaScriptNode createAsyncFunctionBody(JSContext context, JavaScriptNode body, JSWriteFrameSlotNode asyncContext, JSWriteFrameSlotNode asyncResult) {
+        return AsyncFunctionBodyNode.create(context, body, asyncContext, asyncResult);
     }
 
     public JavaScriptNode createGeneratorBody(JSContext context, JavaScriptNode body, JSWriteFrameSlotNode writeYieldValue, JSReadFrameSlotNode readYieldResult) {
@@ -934,7 +955,9 @@ public class NodeFactory {
     }
 
     public FrameDescriptor createBlockFrameDescriptor() {
-        return ScopeFrameNode.SCOPE_FRAME_DESCRIPTOR.shallowCopy();
+        FrameDescriptor desc = new FrameDescriptor(Undefined.instance);
+        desc.addFrameSlot(ScopeFrameNode.PARENT_SCOPE_IDENTIFIER, FrameSlotKind.Object);
+        return desc;
     }
 
     public DeclareGlobalNode createDeclareGlobalVariable(String varName, boolean configurable) {
@@ -945,8 +968,8 @@ public class NodeFactory {
         return new DeclareGlobalFunctionNode(varName, configurable, valueNode);
     }
 
-    public DeclareGlobalNode createDeclareGlobalLexicalVariable(String varName) {
-        return new DeclareGlobalLexicalVariableNode(varName);
+    public DeclareGlobalNode createDeclareGlobalLexicalVariable(String varName, boolean isConst) {
+        return new DeclareGlobalLexicalVariableNode(varName, isConst);
     }
 
     public JavaScriptNode createGlobalDeclarationInstantiation(JSContext context, List<DeclareGlobalNode> declarations) {
@@ -1013,6 +1036,16 @@ public class NodeFactory {
             @Override
             public Frame executeFrame(Frame f) {
                 return module.getEnvironment();
+            }
+
+            @Override
+            public int getFrameLevel() {
+                return -2;
+            }
+
+            @Override
+            public int getScopeLevel() {
+                return -2;
             }
         }
         return new JavaScriptNode() {

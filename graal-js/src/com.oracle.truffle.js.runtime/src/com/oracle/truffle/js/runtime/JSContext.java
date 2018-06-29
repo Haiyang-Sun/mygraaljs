@@ -89,6 +89,7 @@ import com.oracle.truffle.js.runtime.builtins.JSDictionaryObject;
 import com.oracle.truffle.js.runtime.builtins.JSFunction;
 import com.oracle.truffle.js.runtime.builtins.JSFunctionData;
 import com.oracle.truffle.js.runtime.builtins.JSFunctionLookup;
+import com.oracle.truffle.js.runtime.builtins.JSGlobalObject;
 import com.oracle.truffle.js.runtime.builtins.JSModuleNamespace;
 import com.oracle.truffle.js.runtime.builtins.JSUserObject;
 import com.oracle.truffle.js.runtime.builtins.SIMDType;
@@ -119,6 +120,7 @@ public class JSContext implements ShapeContext {
 
     private final Shape emptyShape;
     private final Shape emptyShapePrototypeInObject;
+    private final Shape globalScopeShape;
 
     private final PrintWriterWrapper writer;
     private OutputStream writerStream;
@@ -199,6 +201,10 @@ public class JSContext implements ShapeContext {
         AsyncGeneratorReturnFulfilled,
         AsyncGeneratorReturnRejected,
         AsyncFromSyncIteratorValueUnwrap,
+        CollatorCaseSensitiveCompare,
+        CollatorCompare,
+        DateTimeFormatFormat,
+        NumberFormatFormat,
         ProxyRevokerFunction,
         PromiseResolveFunction,
         PromiseRejectFunction,
@@ -262,7 +268,6 @@ public class JSContext implements ShapeContext {
     private final JSContextOptions contextOptions;
 
     private final Map<Builtin, JSFunctionData> builtinFunctionDataMap = new ConcurrentHashMap<>();
-    private final Map<Source, Object> codeCache = new ConcurrentHashMap<>();
 
     protected JSContext(Evaluator evaluator, JSFunctionLookup lookup, JSContextOptions contextOptions, AbstractJavaScriptLanguage lang, TruffleLanguage.Env env) {
         this.functionLookup = lookup;
@@ -278,6 +283,7 @@ public class JSContext implements ShapeContext {
 
         this.emptyShape = createEmptyShape();
         this.emptyShapePrototypeInObject = createEmptyShapePrototypeInObject();
+        this.globalScopeShape = createGlobalScopeShape();
 
         this.noSuchPropertyUnusedAssumption = JSTruffleOptions.NashornExtensions ? Truffle.getRuntime().createAssumption("noSuchPropertyUnusedAssumption") : null;
         this.noSuchMethodUnusedAssumption = JSTruffleOptions.NashornExtensions ? Truffle.getRuntime().createAssumption("noSuchMethodUnusedAssumption") : null;
@@ -462,6 +468,10 @@ public class JSContext implements ShapeContext {
         return JSShape.makeEmptyRoot(JSObject.LAYOUT, JSUserObject.INSTANCE, this, prototypeProperty);
     }
 
+    private Shape createGlobalScopeShape() {
+        return JSShape.makeEmptyRoot(JSObject.LAYOUT, JSGlobalObject.INSTANCE, this);
+    }
+
     public void setLocalTimeZoneId(ZoneId zoneId) {
         localTimeZoneHolder = new LocalTimeZoneHolder(zoneId);
     }
@@ -502,6 +512,11 @@ public class JSContext implements ShapeContext {
      */
     public final void promiseEnqueueJob(DynamicObject newTarget) {
         invalidatePromiseQueueNotUsedAssumption();
+        promiseJobQueueAdd(newTarget);
+    }
+
+    @TruffleBoundary
+    private void promiseJobQueueAdd(DynamicObject newTarget) {
         promiseJobsQueue.push(newTarget);
     }
 
@@ -566,7 +581,6 @@ public class JSContext implements ShapeContext {
     }
 
     public void setInteropRuntime(JSInteropRuntime interopRuntime) {
-        assert this.interopRuntime == null;
         this.interopRuntime = interopRuntime;
     }
 
@@ -605,6 +619,10 @@ public class JSContext implements ShapeContext {
         return emptyShapePrototypeInObject;
     }
 
+    public final Shape getGlobalScopeShape() {
+        return globalScopeShape;
+    }
+
     @Override
     public final Shape getInitialUserObjectShape() {
         return getRealm().getInitialUserObjectShape();
@@ -628,6 +646,11 @@ public class JSContext implements ShapeContext {
     @Override
     public final DynamicObjectFactory getNumberFactory() {
         return getRealm().getNumberFactory();
+    }
+
+    @Override
+    public final DynamicObjectFactory getBigIntFactory() {
+        return getRealm().getBigIntFactory();
     }
 
     @Override
@@ -1154,6 +1177,10 @@ public class JSContext implements ShapeContext {
         return contextOptions.isV8CompatibilityMode();
     }
 
+    public boolean isOptionNashornCompatibilityMode() {
+        return contextOptions.isNashornCompatibilityMode();
+    }
+
     public boolean isOptionDebugBuiltin() {
         return contextOptions.isDebugBuiltin();
     }
@@ -1437,11 +1464,11 @@ public class JSContext implements ShapeContext {
         this.isRealmInitialized = initialized;
     }
 
-    JSContextOptions getContextOptions() {
+    public JSContextOptions getContextOptions() {
         return contextOptions;
     }
 
-    public Map<Source, Object> getCodeCache() {
-        return codeCache;
+    public int getStackTraceLimit() {
+        return contextOptions.getStackTraceLimit();
     }
 }

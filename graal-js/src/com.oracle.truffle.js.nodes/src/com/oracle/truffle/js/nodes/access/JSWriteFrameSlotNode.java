@@ -40,11 +40,14 @@
  */
 package com.oracle.truffle.js.nodes.access;
 
+import java.util.Set;
+
 import com.oracle.truffle.api.dsl.Executed;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.Frame;
 import com.oracle.truffle.api.frame.FrameSlot;
 import com.oracle.truffle.api.frame.VirtualFrame;
+import com.oracle.truffle.api.instrumentation.InstrumentableNode;
 import com.oracle.truffle.api.instrumentation.Tag;
 import com.oracle.truffle.api.nodes.NodeUtil;
 import com.oracle.truffle.js.nodes.JavaScriptNode;
@@ -72,15 +75,25 @@ public abstract class JSWriteFrameSlotNode extends FrameSlotNode implements Writ
     }
 
     @Override
+    public InstrumentableNode materializeInstrumentableNodes(Set<Class<? extends Tag>> materializedTags) {
+        if (materializedTags.contains(WriteVariableExpressionTag.class)) {
+            if (!getRhs().hasSourceSection() && this.hasSourceSection()) {
+                transferSourceSectionNoTags(this, getRhs());
+            }
+        }
+        return this;
+    }
+
+    @Override
     public abstract JavaScriptNode getRhs();
 
     public abstract Object executeWithFrame(Frame frame, Object value);
 
-    public static JSWriteFrameSlotNode create(FrameSlot frameSlot, int frameLevel, int scopeLevel, JavaScriptNode rhs, boolean hasTemporalDeadZone) {
+    public static JSWriteFrameSlotNode create(FrameSlot frameSlot, int frameLevel, int scopeLevel, FrameSlot[] parentSlots, JavaScriptNode rhs, boolean hasTemporalDeadZone) {
         if (frameLevel == 0 && scopeLevel == 0 && !hasTemporalDeadZone) {
             return JSWriteCurrentFrameSlotNodeGen.create(frameSlot, rhs);
         }
-        return create(frameSlot, ScopeFrameNode.create(frameLevel, scopeLevel), rhs, hasTemporalDeadZone);
+        return create(frameSlot, ScopeFrameNode.create(frameLevel, scopeLevel, parentSlots), rhs, hasTemporalDeadZone);
     }
 
     public static JSWriteFrameSlotNode create(FrameSlot frameSlot, ScopeFrameNode levelFrameNode, JavaScriptNode rhs, boolean hasTemporalDeadZone) {
@@ -235,6 +248,6 @@ abstract class JSWriteCurrentFrameSlotNode extends JSWriteFrameSlotNode {
 
     @Override
     public ScopeFrameNode getLevelFrameNode() {
-        return ScopeFrameNode.create(0, 0);
+        return ScopeFrameNode.create(0);
     }
 }

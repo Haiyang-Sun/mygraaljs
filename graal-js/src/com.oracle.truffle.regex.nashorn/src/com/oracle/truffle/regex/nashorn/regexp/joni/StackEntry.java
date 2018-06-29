@@ -80,20 +80,6 @@ final class StackEntry {
     int getStatePStr() {
         return E2;
     }
-    /* previous char position of pstr */
-    void setStatePStrPrev(final int pstrPrev) {
-        E3 = pstrPrev;
-    }
-    int getStatePStrPrev() {
-        return E3;
-    }
-
-    void setStateCheck(final int check) {
-        E4 = check;
-    }
-    int getStateCheck() {
-        return E4;
-    }
 
     // second union member
     /* for OP_REPEAT_INC, OP_REPEAT_INC_NG */
@@ -123,14 +109,30 @@ final class StackEntry {
     int getRepeatNum() {
         return E3;
     }
+    /* the beginning of the match of the last iteration of the repeat,
+       used to perform null checks */
+    void setRepeatPStr(final int pstr) {
+        E4 = pstr;
+    }
+    int getRepeatPStr() {
+        return E4;
+    }
 
     // third union member
     /* index of stack */ /*int repeat_inc struct*/
-    void setSi(final int si) {
+    void setRepeatIncSi(final int si) {
         E1 = si;
     }
-    int getSi() {
+    int getRepeatIncSi() {
         return E1;
+    }
+    /* the start of the match of the last iteration of the repeat when this REPEAT_INC was pushed,
+       used to restore its original value when undoing/unwinding this entry from the stack */
+    void setRepeatIncPStr(final int pstr) {
+        E2 = pstr;
+    }
+    int getRepeatIncPStr() {
+        return E2;
     }
 
     // fourth union member

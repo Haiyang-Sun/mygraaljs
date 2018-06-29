@@ -59,7 +59,8 @@ def _graal_nodejs_post_gate_runner(args, tasks):
         if t:
             tmpdir = tempfile.mkdtemp()
             try:
-                npm(['--scripts-prepend-node-path=auto', 'install', '--nodedir=' + _suite.dir, 'microtime'], cwd=tmpdir)
+                npm(['init', '-y'], cwd=tmpdir)
+                npm(['--scripts-prepend-node-path=auto', 'install', '--nodedir=' + _suite.dir, '--build-from-source', 'microtime'], cwd=tmpdir)
                 node(['-e', 'print(require("microtime").now());'], cwd=tmpdir)
             finally:
                 shutil.rmtree(tmpdir)
@@ -154,6 +155,7 @@ class GraalNodeJsArchiveProject(mx.ArchivableProject):
 class PreparsedCoreModulesProject(mx.ArchivableProject):
     def __init__(self, suite, name, deps, workingSets, theLicense, **args):
         super(PreparsedCoreModulesProject, self).__init__(suite, name, deps, workingSets, theLicense)
+        self.subDir = args.pop('subDir')
         assert 'prefix' in args
         assert 'outputDir' in args
 
@@ -492,13 +494,11 @@ def buildSvmImage(args):
     for _lang in ['js', 'nodejs']:
         _svm.fetch_languages(['--language:{}=version={}'.format(_lang, _js_version)])
     _svm.fetch_languages(['--tool:regex'])
-    with _svm.native_image_context() as _native_image:
-        _native_image(['--language:nodejs', '-H:JNIConfigurationResources=svmnodejs.jniconfig'] + args)
+    _svm.native_image_on_jvm(['--language:nodejs', '-H:JNIConfigurationResources=svmnodejs.jniconfig'] + args)
 
 def _prepare_svm_env():
     setLibraryPath()
-    _svm = _import_substratevm()
-    _setEnvVar('NODE_JVM_LIB', join(_svm.svmbuild_dir(), mx.add_lib_suffix('nodejs')))
+    _setEnvVar('NODE_JVM_LIB', join(_suite.dir, mx.add_lib_suffix('nodejs')))
 
 def testsvmnode(args, nonZeroIsFatal=True, out=None, err=None, cwd=None):
     _prepare_svm_env()

@@ -47,7 +47,11 @@ import com.oracle.truffle.js.nodes.JavaScriptNode;
 import com.oracle.truffle.js.nodes.Truncatable;
 import com.oracle.truffle.js.nodes.access.JSConstantNode.JSConstantIntegerNode;
 import com.oracle.truffle.js.nodes.cast.JSToInt32Node;
+import com.oracle.truffle.js.nodes.cast.JSToNumericNode;
+import com.oracle.truffle.js.runtime.BigInt;
+import com.oracle.truffle.js.runtime.JSRuntime;
 import com.oracle.truffle.js.runtime.JSTruffleOptions;
+import com.oracle.truffle.js.runtime.LargeInteger;
 
 @NodeInfo(shortName = "&")
 public abstract class JSBitwiseAndNode extends JSBinaryNode {
@@ -66,27 +70,52 @@ public abstract class JSBitwiseAndNode extends JSBinaryNode {
         return JSBitwiseAndNodeGen.create(left, right);
     }
 
-    public abstract int executeInt(Object a, Object b);
-
-    @Override
-    public boolean isResultAlwaysOfType(Class<?> clazz) {
-        return clazz == int.class;
-    }
+    public abstract Object executeObject(Object a, Object b);
 
     @Specialization
     protected int doInteger(int a, int b) {
         return a & b;
     }
 
-    @Specialization(replaces = "doInteger")
-    protected int doGeneric(Object a, Object b,
+    @Specialization
+    protected int doLargeIntegerInt(LargeInteger a, int b) {
+        return doInteger(a.intValue(), b);
+    }
+
+    @Specialization
+    protected int doIntLargeInteger(int a, LargeInteger b) {
+        return doInteger(a, b.intValue());
+    }
+
+    @Specialization
+    protected int doDouble(double a, double b,
                     @Cached("create()") JSToInt32Node leftInt32,
                     @Cached("create()") JSToInt32Node rightInt32) {
         return doInteger(leftInt32.executeInt(a), rightInt32.executeInt(b));
     }
 
+    @Specialization
+    protected BigInt doBigInt(BigInt a, BigInt b) {
+        return a.and(b);
+    }
+
+    @Specialization(replaces = {"doInteger", "doIntLargeInteger", "doLargeIntegerInt", "doDouble", "doBigInt"})
+    protected Object doGeneric(Object a, Object b,
+                    @Cached("create()") JSToNumericNode leftNumeric,
+                    @Cached("create()") JSToNumericNode rightNumeric,
+                    @Cached("createBlind()") JSBitwiseAndNode and) {
+        Object left = leftNumeric.execute(a);
+        Object right = rightNumeric.execute(b);
+        JSRuntime.ensureBothSameNumericType(left, right);
+        return and.executeObject(left, right);
+    }
+
     @Override
     protected JavaScriptNode copyUninitialized() {
         return JSBitwiseAndNodeGen.create(cloneUninitialized(getLeft()), cloneUninitialized(getRight()));
+    }
+
+    public static final JSBitwiseAndNode createBlind() {
+        return (JSBitwiseAndNode) create(null, null);
     }
 }

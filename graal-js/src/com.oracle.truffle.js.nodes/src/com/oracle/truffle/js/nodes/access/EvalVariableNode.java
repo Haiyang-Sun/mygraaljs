@@ -49,6 +49,7 @@ import com.oracle.truffle.js.nodes.ReadNode;
 import com.oracle.truffle.js.nodes.instrumentation.JSTags;
 import com.oracle.truffle.js.nodes.instrumentation.JSTags.ReadVariableExpressionTag;
 import com.oracle.truffle.js.nodes.instrumentation.JSTags.WriteVariableExpressionTag;
+import com.oracle.truffle.js.nodes.instrumentation.NodeObjectDescriptor;
 import com.oracle.truffle.js.runtime.JSContext;
 import com.oracle.truffle.js.runtime.objects.Undefined;
 
@@ -82,15 +83,21 @@ public final class EvalVariableNode extends JavaScriptNode implements ReadNode, 
         return defaultDelegate;
     }
 
-    private boolean isWrite() {
-        return scopeAccessNode instanceof WritePropertyNode;
+    public JavaScriptNode getOriginalFrameSlotNode() {
+        if (this.defaultDelegate instanceof EvalVariableNode) {
+            return ((EvalVariableNode) this.defaultDelegate).getOriginalFrameSlotNode();
+        } else if (this.defaultDelegate instanceof FrameSlotNode) {
+            return this.defaultDelegate;
+        } else {
+            return null;
+        }
     }
 
     @Override
     public boolean hasTag(Class<? extends Tag> tag) {
-        if (tag == ReadVariableExpressionTag.class && !isWrite()) {
+        if (tag == ReadVariableExpressionTag.class && getOriginalFrameSlotNode() instanceof ReadNode) {
             return true;
-        } else if (tag == WriteVariableExpressionTag.class && isWrite()) {
+        } else if (tag == WriteVariableExpressionTag.class && getOriginalFrameSlotNode() instanceof WriteNode) {
             return true;
         } else {
             return super.hasTag(tag);
@@ -99,7 +106,13 @@ public final class EvalVariableNode extends JavaScriptNode implements ReadNode, 
 
     @Override
     public Object getNodeObject() {
-        return JSTags.createNodeObjectDescriptor("name", varName);
+        NodeObjectDescriptor desc = JSTags.createNodeObjectDescriptor("name", varName);
+        desc.addProperty("delegate", getOriginalFrameSlotNode());
+        return desc;
+    }
+
+    private boolean isWrite() {
+        return scopeAccessNode instanceof WritePropertyNode;
     }
 
     @Override

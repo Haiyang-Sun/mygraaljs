@@ -50,6 +50,8 @@ import com.oracle.truffle.api.object.DynamicObject;
 import com.oracle.truffle.api.profiles.BranchProfile;
 import com.oracle.truffle.js.nodes.JavaScriptNode;
 import com.oracle.truffle.js.nodes.instrumentation.JSTags;
+import com.oracle.truffle.js.nodes.instrumentation.NodeObjectDescriptor;
+import com.oracle.truffle.js.nodes.instrumentation.JSTags.ReadVariableExpressionTag;
 import com.oracle.truffle.js.nodes.instrumentation.JSTags.WriteVariableExpressionTag;
 import com.oracle.truffle.js.runtime.builtins.JSArgumentsObject;
 
@@ -84,7 +86,10 @@ public abstract class JSGuardDisconnectedArgumentWrite extends JavaScriptNode im
 
     @Override
     public Object getNodeObject() {
-        return JSTags.createNodeObjectDescriptor("name", slot.getIdentifier());
+        assert (argumentsArrayNode instanceof JSReadFrameSlotNode);
+        NodeObjectDescriptor desc = JSTags.createNodeObjectDescriptor("argsnode", argumentsArrayNode);
+        desc.addProperty("name", this.index);
+        return desc;
     }
 
     @Specialization(guards = "!isArgumentsDisconnected(argumentsArray)")
