@@ -77,7 +77,6 @@ public abstract class ScopeFrameNode extends JavaScriptBaseNode {
         return JSArguments.getFunctionObject(retFrame.getArguments());
     }
 
-    public static ScopeFrameNode create(int frameLevel, int scopeLevel, FrameSlot parentSlot) {
     public static ScopeFrameNode create(int frameLevel, int scopeLevel, FrameSlot[] parentSlots) {
         assert scopeLevel == parentSlots.length;
         if (frameLevel == 0) {
