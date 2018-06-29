@@ -286,7 +286,16 @@ public final class JSCollator extends JSBuiltinObject implements JSConstructorFa
                     }
 
                     if (state.boundCompareFunction == null) {
-                        DynamicObject compareFn = state.sensitivity.equals("case") ? createCaseSensitiveCompareFunction(realm, context) : createCompareFunction(realm, context);
+                        JSFunctionData compareFunctionData;
+                        DynamicObject compareFn;
+                        if (state.sensitivity.equals("case")) {
+                            compareFunctionData = context.getOrCreateBuiltinFunctionData(JSContext.BuiltinFunctionKey.CollatorCaseSensitiveCompare,
+                                            c -> createCaseSensitiveCompareFunctionData(c));
+                            compareFn = JSFunction.create(realm, compareFunctionData);
+                        } else {
+                            compareFunctionData = context.getOrCreateBuiltinFunctionData(JSContext.BuiltinFunctionKey.CollatorCompare, c -> createCompareFunctionData(c));
+                            compareFn = JSFunction.create(realm, compareFunctionData);
+                        }
                         DynamicObject boundFn = JSFunction.boundFunctionCreate(context, realm, compareFn, collatorObj, new Object[]{}, JSObject.getPrototype(compareFn), true);
                         state.boundCompareFunction = boundFn;
                     }
@@ -304,8 +313,8 @@ public final class JSCollator extends JSBuiltinObject implements JSConstructorFa
         }
     }
 
-    private static DynamicObject createCompareFunction(JSRealm realm, JSContext context) {
-        DynamicObject result = JSFunction.create(realm, JSFunctionData.createCallOnly(context, Truffle.getRuntime().createCallTarget(new JavaScriptRootNode(context.getLanguage(), null, null) {
+    private static JSFunctionData createCompareFunctionData(JSContext context) {
+        return JSFunctionData.createCallOnly(context, Truffle.getRuntime().createCallTarget(new JavaScriptRootNode(context.getLanguage(), null, null) {
             @Override
             public Object execute(VirtualFrame frame) {
                 Object[] arguments = frame.getArguments();
@@ -315,12 +324,11 @@ public final class JSCollator extends JSBuiltinObject implements JSConstructorFa
                 String two = (argumentCount > 1) ? JSRuntime.toString(JSArguments.getUserArgument(arguments, 1)) : Undefined.NAME;
                 return compare(thisObj, one, two);
             }
-        }), 2, "compare"));
-        return result;
+        }), 2, "compare");
     }
 
-    private static DynamicObject createCaseSensitiveCompareFunction(JSRealm realm, JSContext context) {
-        DynamicObject result = JSFunction.create(realm, JSFunctionData.createCallOnly(context, Truffle.getRuntime().createCallTarget(new JavaScriptRootNode(context.getLanguage(), null, null) {
+    private static JSFunctionData createCaseSensitiveCompareFunctionData(JSContext context) {
+        return JSFunctionData.createCallOnly(context, Truffle.getRuntime().createCallTarget(new JavaScriptRootNode(context.getLanguage(), null, null) {
             @Override
             public Object execute(VirtualFrame frame) {
                 Object[] arguments = frame.getArguments();
@@ -330,8 +338,7 @@ public final class JSCollator extends JSBuiltinObject implements JSConstructorFa
                 String two = (argumentCount > 1) ? JSRuntime.toString(JSArguments.getUserArgument(arguments, 1)) : Undefined.NAME;
                 return caseSensitiveCompare(thisObj, one, two);
             }
-        }), 2, "compare"));
-        return result;
+        }), 2, "compare");
     }
 
     private static DynamicObject createCompareFunctionGetter(JSRealm realm, JSContext context) {

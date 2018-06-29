@@ -47,10 +47,10 @@ import java.util.List;
 
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.api.TruffleLanguage;
 import com.oracle.truffle.api.interop.ForeignAccess;
 import com.oracle.truffle.api.interop.Message;
 import com.oracle.truffle.api.interop.TruffleObject;
-import com.oracle.truffle.api.interop.java.JavaInterop;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.RootNode;
 import com.oracle.truffle.api.object.DynamicObject;
@@ -63,6 +63,7 @@ import com.oracle.truffle.js.runtime.builtins.JSAdapter;
 import com.oracle.truffle.js.runtime.builtins.JSArray;
 import com.oracle.truffle.js.runtime.builtins.JSArrayBuffer;
 import com.oracle.truffle.js.runtime.builtins.JSArrayBufferView;
+import com.oracle.truffle.js.runtime.builtins.JSBigInt;
 import com.oracle.truffle.js.runtime.builtins.JSBoolean;
 import com.oracle.truffle.js.runtime.builtins.JSClass;
 import com.oracle.truffle.js.runtime.builtins.JSFunction;
@@ -111,6 +112,7 @@ public final class JSRuntime {
     public static final int MAX_INTEGER_INDEX_DIGITS = 21;
     public static final int MAX_SAFE_INTEGER_IN_FLOAT = 1 << 24;
     public static final int MIN_SAFE_INTEGER_IN_FLOAT = -MAX_SAFE_INTEGER_IN_FLOAT;
+    public static final long MAX_BIG_INT_EXPONENT = Integer.MAX_VALUE;
 
     public static final String TO_STRING = "toString";
     public static final String VALUE_OF = "valueOf";
@@ -212,6 +214,8 @@ public final class JSRuntime {
             return JSString.TYPE_NAME;
         } else if (isNumber(value)) {
             return JSNumber.TYPE_NAME;
+        } else if (isBigInt(value)) {
+            return JSBigInt.TYPE_NAME;
         } else if (value instanceof Boolean) {
             return JSBoolean.TYPE_NAME;
         } else if (value instanceof Symbol) {
@@ -349,6 +353,8 @@ public final class JSRuntime {
             return ((String) value).length() != 0;
         } else if (isLazyString(value)) {
             return value.toString().length() != 0;
+        } else if (value instanceof BigInt) {
+            return ((BigInt) value).compareTo(BigInt.ZERO) != 0;
         } else {
             return true;
         }
@@ -372,6 +378,16 @@ public final class JSRuntime {
     public static Number toNumber(Object value) {
         Object primitive = isObject(value) ? JSObject.toPrimitive((DynamicObject) value, HINT_NUMBER) : value;
         return toNumberFromPrimitive(primitive);
+    }
+
+    @TruffleBoundary
+    public static Object toNumeric(Object value) {
+        Object primitive = isObject(value) ? JSObject.toPrimitive((DynamicObject) value, HINT_NUMBER) : value;
+        if (primitive instanceof BigInt) {
+            return primitive;
+        } else {
+            return toNumberFromPrimitive(primitive);
+        }
     }
 
     @TruffleBoundary
@@ -403,6 +419,16 @@ public final class JSRuntime {
 
     public static boolean isNumber(Object value) {
         return value instanceof Integer || value instanceof Double || value instanceof Long || value instanceof LargeInteger;
+    }
+
+    public static boolean isBigInt(Object value) {
+        return value instanceof BigInt;
+    }
+
+    public static void ensureBothSameNumericType(Object a, Object b) {
+        if ((a instanceof BigInt) != (b instanceof BigInt)) {
+            throw Errors.createTypeErrorCanNotMixBigIntWithOtherTypes();
+        }
     }
 
     public static boolean isJavaNumber(Object value) {
@@ -916,11 +942,11 @@ public final class JSRuntime {
                 sb.append(", ");
             }
             if (isArray) {
-                // merge holes to "undefined × #" entries
+                // merge holes to "undefined (times) (count)" entries
                 if (JSRuntime.isArrayIndex(key)) {
                     long index = JSRuntime.parseArrayIndexRaw(key.toString());
                     if ((index < length) && (index != (prevArrayIndex + 1))) {
-                        sb.append("undefined × ");
+                        sb.append("undefined \u00d7 ");
                         sb.append((index - prevArrayIndex - 1));
                         sb.append(", ");
                         propertyCount++;
@@ -964,7 +990,7 @@ public final class JSRuntime {
             }
         }
         if (isArray && propertyCount < JSTruffleOptions.MaxConsolePrintProperties) {
-            // fill "undefined × #" entries at end of array (no other props)
+            // fill "undefined (times) (count)" entries at the end of the array
             if (fillUndefinedArrayRest(sb, length, prevArrayIndex, propertyCount > 0)) {
                 propertyCount++;
             }
@@ -1041,7 +1067,7 @@ public final class JSRuntime {
             if (prependComma) {
                 sb.append(", ");
             }
-            sb.append("undefined × ");
+            sb.append("undefined \u00d7 ");
             sb.append((arrayLen - prevArrayIndex - 1));
             return true;
         }
@@ -1174,7 +1200,7 @@ public final class JSRuntime {
     // avoiding a virtual call for equals(), not fail on SVM.
     // No TruffleBoundary, we want this to partially evaluate.
     public static boolean propertyKeyEquals(Object a, Object b) {
-        assert isPropertyKey(a) || a instanceof HiddenKey;
+        assert isPropertyKey(a);
         if (a instanceof String) {
             if (b instanceof String) {
                 return ((String) a).equals(b);
@@ -1186,8 +1212,7 @@ public final class JSRuntime {
         } else if (a instanceof Symbol) {
             return ((Symbol) a).equals(b);
         } else {
-            assert a instanceof HiddenKey;
-            return ((HiddenKey) a).equals(b);
+            throw Errors.shouldNotReachHere();
         }
     }
 
@@ -1285,6 +1310,8 @@ public final class JSRuntime {
             return JSString.create(ctx, (String) value);
         } else if (value instanceof JSLazyString) {
             return JSString.create(ctx, (JSLazyString) value);
+        } else if (value instanceof BigInt) {
+            return JSBigInt.create(ctx, (BigInt) value);
         } else if (value instanceof PropertyReference) {
             return JSString.create(ctx, value.toString());
         } else if (isNumber(value)) {
@@ -1320,6 +1347,8 @@ public final class JSRuntime {
             return x.toString().equals(y.toString());
         } else if (x instanceof Boolean && y instanceof Boolean) {
             return (boolean) x == (boolean) y;
+        } else if (isBigInt(x) && isBigInt(y)) {
+            return ((BigInt) x).compareTo((BigInt) y) == 0;
         }
         return x == y;
     }
@@ -1344,6 +1373,18 @@ public final class JSRuntime {
             return equal(a, stringToNumber(b.toString()));
         } else if (isString(a) && isJavaNumber(b)) {
             return equal(stringToNumber(a.toString()), b);
+        } else if (isBigInt(a) && isBigInt(b)) {
+            return a.equals(b);
+        } else if (isBigInt(a) && isString(b)) {
+            return a.equals(stringToBigInt(b.toString()));
+        } else if (isString(a) && isBigInt(b)) {
+            return b.equals(stringToBigInt(a.toString()));
+        } else if (isJavaNumber(a) && isBigInt(b)) {
+            double numberVal = doubleValue((Number) a);
+            return !Double.isNaN(numberVal) && ((BigInt) b).compareValueTo(numberVal) == 0;
+        } else if (isBigInt(a) && isJavaNumber(b)) {
+            double numberVal = doubleValue((Number) a);
+            return !Double.isNaN(numberVal) && ((BigInt) a).compareValueTo(numberVal) == 0;
         } else if (a instanceof Boolean) {
             return equal(booleanToNumber((Boolean) a), b);
         } else if (b instanceof Boolean) {
@@ -1366,7 +1407,8 @@ public final class JSRuntime {
     }
 
     public static boolean isForeignObject(Object value) {
-        return value instanceof TruffleObject && !JSObject.isJSObject(value) && !(value instanceof Symbol) && !(value instanceof JSLazyString) && !(value instanceof LargeInteger);
+        return value instanceof TruffleObject && !JSObject.isJSObject(value) && !(value instanceof Symbol) && !(value instanceof JSLazyString) && !(value instanceof LargeInteger) &&
+                        !(value instanceof BigInt);
     }
 
     private static boolean equalInterop(Object a, Object b) {
@@ -1415,6 +1457,9 @@ public final class JSRuntime {
         if (a == Null.instance || b == Null.instance) {
             return false;
         }
+        if (isBigInt(a) && isBigInt(b)) {
+            return a.equals(b);
+        }
         if (isJavaNumber(a) && isJavaNumber(b)) {
             if (a instanceof Integer && b instanceof Integer) {
                 return ((Integer) a).intValue() == ((Integer) b).intValue();
@@ -1428,8 +1473,9 @@ public final class JSRuntime {
         if (isString(a) && isString(b)) {
             return a.toString().equals(b.toString());
         }
-        if (JavaInterop.isJavaObject(a) && JavaInterop.isJavaObject(b)) {
-            return JavaInterop.asJavaObject((TruffleObject) a) == JavaInterop.asJavaObject((TruffleObject) b);
+        TruffleLanguage.Env env = AbstractJavaScriptLanguage.getCurrentEnv();
+        if (env.isHostObject(a) && env.isHostObject(b)) {
+            return env.asHostObject(a) == env.asHostObject(b);
         }
         return false;
     }
@@ -1711,7 +1757,7 @@ public final class JSRuntime {
     }
 
     public static boolean isJSPrimitive(Object value) {
-        return isNumber(value) || value instanceof Boolean || isString(value) || value == Undefined.instance || value == Null.instance || value instanceof Symbol;
+        return isNumber(value) || value instanceof BigInt || value instanceof Boolean || isString(value) || value == Undefined.instance || value == Null.instance || value instanceof Symbol;
     }
 
     /**
@@ -1770,6 +1816,15 @@ public final class JSRuntime {
             return (int) longIndex;
         } else {
             return (double) longIndex;
+        }
+    }
+
+    @TruffleBoundary
+    public static BigInt stringToBigInt(String s) {
+        try {
+            return BigInt.valueOf(s);
+        } catch (NumberFormatException e) {
+            return null;
         }
     }
 
@@ -2564,15 +2619,16 @@ public final class JSRuntime {
             return value.toString();
         } else if (value instanceof LargeInteger) {
             return ((LargeInteger) value).doubleValue();
-        } else if (JSFunction.isJSFunction(value) && !JSFunction.isBoundFunction(((DynamicObject) value))) {
-            JSRealm realm = JSFunction.getRealm((DynamicObject) value);
-            return JSFunction.bind(realm, (DynamicObject) value, Undefined.instance, new Object[]{});
-        } else if (JSObject.isDynamicObject(value)) {
+        } else if (value instanceof TruffleObject) {
             return value;
-        } else if (value instanceof JavaClass) {
-            return JavaInterop.asTruffleObject(((JavaClass) value).getType());
+        } else if (JSRuntime.isJSPrimitive(value)) {
+            return value;
         }
-        return JavaInterop.asTruffleValue(value);
+        TruffleLanguage.Env env = AbstractJavaScriptLanguage.getCurrentEnv();
+        if (value instanceof JavaClass) {
+            return env.asGuestValue(((JavaClass) value).getType());
+        }
+        return env.asGuestValue(value);
     }
 
     @TruffleBoundary
@@ -2631,4 +2687,15 @@ public final class JSRuntime {
         return (MIN_SAFE_INTEGER_IN_FLOAT <= value && value <= MAX_SAFE_INTEGER_IN_FLOAT);
     }
 
+    public static boolean isJavaPrimitive(Object value) {
+        return value != null &&
+                        value instanceof Boolean ||
+                        value instanceof Byte ||
+                        value instanceof Short ||
+                        value instanceof Integer ||
+                        value instanceof Long ||
+                        value instanceof Float ||
+                        value instanceof Double ||
+                        value instanceof Character;
+    }
 }

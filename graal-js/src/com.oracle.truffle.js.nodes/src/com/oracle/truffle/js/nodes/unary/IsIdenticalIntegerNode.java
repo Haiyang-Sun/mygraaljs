@@ -43,6 +43,7 @@ package com.oracle.truffle.js.nodes.unary;
 import com.oracle.truffle.api.dsl.Fallback;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.js.nodes.JavaScriptNode;
+import com.oracle.truffle.js.runtime.BigInt;
 import com.oracle.truffle.js.runtime.JSRuntime;
 
 public abstract class IsIdenticalIntegerNode extends JSUnaryNode {
@@ -62,6 +63,11 @@ public abstract class IsIdenticalIntegerNode extends JSUnaryNode {
     @Specialization
     protected boolean doDouble(double a) {
         return a == integer;
+    }
+
+    @Specialization
+    protected boolean doBigInt(@SuppressWarnings("unused") BigInt a) {
+        return false;
     }
 
     // long etc could come via Interop

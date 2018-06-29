@@ -40,6 +40,7 @@
  */
 package com.oracle.truffle.js.parser.env;
 
+import java.util.Arrays;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Objects;
@@ -57,6 +58,7 @@ import com.oracle.truffle.js.nodes.access.DoWithNode;
 import com.oracle.truffle.js.nodes.access.EvalVariableNode;
 import com.oracle.truffle.js.nodes.access.JSTargetableNode;
 import com.oracle.truffle.js.nodes.access.ReadElementNode;
+import com.oracle.truffle.js.nodes.access.ScopeFrameNode;
 import com.oracle.truffle.js.nodes.access.WriteElementNode;
 import com.oracle.truffle.js.nodes.access.WriteNode;
 import com.oracle.truffle.js.runtime.JSContext;
@@ -138,12 +140,11 @@ public abstract class Environment {
     }
 
     protected final JavaScriptNode createLocal(FrameSlot frameSlot, int level, int scopeLevel) {
-        JavaScriptNode local = factory.createLocal(frameSlot, level, scopeLevel, false);
-        return local;
+        return factory.createLocal(frameSlot, level, scopeLevel, getParentSlots(level, scopeLevel), false);
     }
 
     protected final JavaScriptNode createLocal(FrameSlot frameSlot, int level, int scopeLevel, boolean checkTDZ) {
-        return factory.createLocal(frameSlot, level, scopeLevel, checkTDZ);
+        return factory.createLocal(frameSlot, level, scopeLevel, getParentSlots(level, scopeLevel), checkTDZ);
     }
 
     protected final VarRef findInternalSlot(String name) {
@@ -203,6 +204,19 @@ public abstract class Environment {
                     wrapFrameLevel = frameLevel;
                 }
                 // with environments don't introduce any variables, skip lookup
+            } else if (current instanceof GlobalEnvironment) {
+                // We can distinguish 3 cases:
+                // 1. HasLexicalDeclaration: statically resolved to lexical declaration (with TDZ).
+                // 2. HasVarDeclaration: statically resolved to global object property.
+                // Note: 1. and 2. mutually exclude each other (early SyntaxError).
+                // 3. Undeclared global (external lexical declaration or global object property).
+                // .. Dynamically resolved using lexical global scope and global object lookups.
+                GlobalEnvironment globalEnv = (GlobalEnvironment) current;
+                if (globalEnv.hasLexicalDeclaration(name) && !GlobalEnvironment.isGlobalObjectConstant(name)) {
+                    return wrapIn(wrapClosure, wrapFrameLevel, new GlobalLexVarRef(name, globalEnv.hasConstDeclaration(name)));
+                } else if (!globalEnv.hasVarDeclaration(name) && !GlobalEnvironment.isGlobalObjectConstant(name)) {
+                    wrapClosure = makeGlobalWrapClosure(wrapClosure, name);
+                }
             } else {
                 FrameSlot slot = current.findBlockFrameSlot(name);
                 if (slot != null) {
@@ -269,7 +283,7 @@ public abstract class Environment {
                 JavaScriptNode dynamicScopeNode = createLocal(dynamicScopeSlot, frameLevel, scopeLevel);
                 JSTargetableNode scopeAccessNode;
                 if (access == WrapAccess.Delete) {
-                    scopeAccessNode = factory.createDeleteProperty(null, factory.createConstantString(name), isStrictMode());
+                    scopeAccessNode = factory.createDeleteProperty(null, factory.createConstantString(name), isStrictMode(), context);
                 } else if (access == WrapAccess.Write) {
                     assert delegateNode instanceof WriteNode : delegateNode;
                     scopeAccessNode = factory.createWriteProperty(null, name, null, context, isStrictMode());
@@ -290,7 +304,7 @@ public abstract class Environment {
             public JavaScriptNode apply(JavaScriptNode delegateNode, WrapAccess access) {
                 JSTargetableNode withAccessNode;
                 if (access == WrapAccess.Delete) {
-                    withAccessNode = factory.createDeleteProperty(null, factory.createConstantString(name), isStrictMode());
+                    withAccessNode = factory.createDeleteProperty(null, factory.createConstantString(name), isStrictMode(), context);
                 } else if (access == WrapAccess.Write) {
                     assert delegateNode instanceof WriteNode : delegateNode;
                     withAccessNode = factory.createWriteProperty(null, name, null, context, isStrictMode());
@@ -300,6 +314,28 @@ public abstract class Environment {
                     withAccessNode = factory.createProperty(context, null, name);
                 }
                 return new DoWithNode(context, name, findLocalVar(withVarName).createReadNode(), withAccessNode, delegateNode);
+            }
+        });
+    }
+
+    private WrapClosure makeGlobalWrapClosure(WrapClosure wrapClosure, String name) {
+        WrapClosure inner = maybeMakeDefaultWrapClosure(wrapClosure);
+        return inner.compose(new WrapClosure() {
+            @Override
+            public JavaScriptNode apply(JavaScriptNode delegateNode, WrapAccess access) {
+                JSTargetableNode scopeAccessNode;
+                if (access == WrapAccess.Delete) {
+                    scopeAccessNode = factory.createDeleteProperty(null, factory.createConstantString(name), isStrictMode(), context);
+                } else if (access == WrapAccess.Write) {
+                    assert delegateNode instanceof WriteNode : delegateNode;
+                    scopeAccessNode = factory.createWriteProperty(null, name, null, context, true);
+                } else {
+                    assert access == WrapAccess.Read;
+                    assert delegateNode instanceof ReadNode || delegateNode instanceof RepeatableNode : delegateNode;
+                    scopeAccessNode = factory.createProperty(context, null, name);
+                }
+                JavaScriptNode globalScope = factory.createGlobalScope(context);
+                return factory.createGlobalVarWrapper(context, name, delegateNode, globalScope, scopeAccessNode);
             }
         });
     }
@@ -338,7 +374,7 @@ public abstract class Environment {
             FunctionEnvironment currentFunction = current.function();
             JavaScriptNode createArgumentsObjectNode = factory.createArgumentsObjectNode(context, isStrictMode(), currentFunction.getLeadingArgumentCount(),
                             currentFunction.getTrailingArgumentCount());
-            JavaScriptNode writeNode = factory.createWriteFrameSlot(currentFunction.getArgumentsSlot(), frameLevel, scopeLevel, createArgumentsObjectNode);
+            JavaScriptNode writeNode = factory.createWriteFrameSlot(currentFunction.getArgumentsSlot(), frameLevel, scopeLevel, getParentSlots(frameLevel, scopeLevel), createArgumentsObjectNode);
             return factory.createAccessArgumentsArrayDirectly(writeNode, argumentsVarNode, currentFunction.getLeadingArgumentCount(), currentFunction.getTrailingArgumentCount());
         } else {
             return argumentsVarNode;
@@ -346,9 +382,6 @@ public abstract class Environment {
     }
 
     private JavaScriptNode createReadLocalVarNodeFromSlot(Environment current, int frameLevel, FrameSlot slot, int scopeLevel, boolean checkTDZ) {
-        if (current instanceof GlobalEnvironment) {
-            return factory.createReadGlobal(slot, checkTDZ, context);
-        }
         FunctionEnvironment currentFunction = current.function();
         if (currentFunction.getArgumentsSlot() != null && !currentFunction.isStrictMode() && currentFunction.hasSimpleParameterList() && currentFunction.isParam(slot)) {
             return createReadParameterFromMappedArguments(current, frameLevel, scopeLevel, slot);
@@ -357,14 +390,11 @@ public abstract class Environment {
     }
 
     private JavaScriptNode createWriteLocalVarNodeFromSlot(Environment current, int frameLevel, FrameSlot slot, int scopeLevel, boolean checkTDZ, JavaScriptNode rhs) {
-        if (current instanceof GlobalEnvironment) {
-            return factory.createWriteGlobal(slot, rhs, checkTDZ, context);
-        }
         FunctionEnvironment currentFunction = current.function();
         if (currentFunction.getArgumentsSlot() != null && !currentFunction.isStrictMode() && currentFunction.hasSimpleParameterList() && currentFunction.isParam(slot)) {
             return createWriteParameterFromMappedArguments(current, frameLevel, scopeLevel, slot, rhs);
         }
-        return factory.createWriteFrameSlot(slot, frameLevel, scopeLevel, rhs, checkTDZ);
+        return factory.createWriteFrameSlot(slot, frameLevel, scopeLevel, getParentSlots(frameLevel, scopeLevel), rhs, checkTDZ);
     }
 
     private JavaScriptNode createReadParameterFromMappedArguments(Environment current, int frameLevel, int scopeLevel, FrameSlot slot) {
@@ -419,12 +449,12 @@ public abstract class Environment {
 
             @Override
             public JavaScriptNode createReadNode() {
-                return factory.createLocal(var, 0, getScopeLevel());
+                return factory.createLocal(var, 0, getScopeLevel(), getParentSlots());
             }
 
             @Override
             public JavaScriptNode createWriteNode(JavaScriptNode rhs) {
-                return factory.createWriteFrameSlot(var, 0, getScopeLevel(), rhs);
+                return factory.createWriteFrameSlot(var, 0, getScopeLevel(), getParentSlots(), rhs);
             }
         };
     }
@@ -445,6 +475,26 @@ public abstract class Environment {
         return 0;
     }
 
+    public FrameSlot[] getParentSlots() {
+        throw new UnsupportedOperationException(getClass().getName());
+    }
+
+    public final FrameSlot[] getParentSlots(int frameLevel, int scopeLevel) {
+        if (scopeLevel == 0) {
+            return ScopeFrameNode.EMPTY_FRAME_SLOT_ARRAY;
+        }
+        if (frameLevel > 0) {
+            return function().getParent().getParentSlots(frameLevel - 1, scopeLevel);
+        }
+        FrameSlot[] parentSlots = getParentSlots();
+        assert parentSlots.length >= scopeLevel;
+        if (parentSlots.length == scopeLevel) {
+            return parentSlots;
+        } else {
+            return Arrays.copyOf(parentSlots, scopeLevel);
+        }
+    }
+
     public void addFrameSlotsFromSymbols(Iterable<com.oracle.js.parser.ir.Symbol> symbols) {
         addFrameSlotsFromSymbols(symbols, false);
     }
@@ -461,8 +511,8 @@ public abstract class Environment {
     }
 
     public void addFrameSlotFromSymbol(com.oracle.js.parser.ir.Symbol symbol) {
-        assert !getBlockFrameDescriptor().getIdentifiers().contains(symbol.getName()) || this instanceof FunctionEnvironment &&
-                        (function().isParameter(symbol.getName()) || symbol.getName().equals(ARGUMENTS_NAME));
+        // Frame slot may already exist for simple parameters and "arguments".
+        assert !getBlockFrameDescriptor().getIdentifiers().contains(symbol.getName()) || this instanceof FunctionEnvironment;
         int flags = symbol.getFlags();
         getBlockFrameDescriptor().findOrAddFrameSlot(symbol.getName(), FrameSlotFlags.of(flags), FrameSlotKind.Illegal);
     }
@@ -501,7 +551,13 @@ public abstract class Environment {
 
         public abstract boolean isGlobal();
 
-        public abstract FrameSlot getFrameSlot();
+        public boolean isConst() {
+            return false;
+        }
+
+        public FrameSlot getFrameSlot() {
+            return null;
+        }
 
         public String getName() {
             return name;
@@ -572,6 +628,11 @@ public abstract class Environment {
         }
 
         @Override
+        public boolean isConst() {
+            return JSFrameUtil.isConst(frameSlot);
+        }
+
+        @Override
         public JavaScriptNode createReadNode() {
             return createReadLocalVarNodeFromSlot(current, frameLevel, frameSlot, scopeLevel, checkTDZ);
         }
@@ -634,7 +695,7 @@ public abstract class Environment {
         @Override
         public JavaScriptNode createWriteNode(JavaScriptNode rhs) {
             assert !current.function().isDirectArgumentsAccess();
-            return factory.createWriteFrameSlot(current.function().getArgumentsSlot(), frameLevel, scopeLevel, rhs);
+            return factory.createWriteFrameSlot(current.function().getArgumentsSlot(), frameLevel, scopeLevel, getParentSlots(frameLevel, scopeLevel), rhs);
         }
     }
 
@@ -688,13 +749,89 @@ public abstract class Environment {
         public JavaScriptNode createDeleteNode() {
             JavaScriptNode element = factory.createConstantString(name);
             JavaScriptNode object = factory.createGlobalObject(context);
-            return factory.createDeleteProperty(object, element, isStrictMode());
+            return factory.createDeleteProperty(object, element, isStrictMode(), context);
         }
 
         @Override
         public VarRef withRequired(@SuppressWarnings("hiding") boolean required) {
             if (this.required != required) {
                 return new GlobalVarRef(name, required);
+            }
+            return this;
+        }
+    }
+
+    public class GlobalLexVarRef extends VarRef {
+        private final boolean isConst;
+        private final boolean required;
+        private final boolean checkTDZ;
+
+        public GlobalLexVarRef(String name, boolean isConst) {
+            this(name, isConst, true, false);
+        }
+
+        private GlobalLexVarRef(String name, boolean isConst, boolean required, boolean checkTDZ) {
+            super(name);
+            assert !name.equals(Null.NAME) && !name.equals(Undefined.NAME);
+            this.isConst = isConst;
+            this.required = required;
+            this.checkTDZ = checkTDZ;
+        }
+
+        @Override
+        public JavaScriptNode createReadNode() {
+            if (!required) {
+                JavaScriptNode globalScope = factory.createGlobalScopeTDZCheck(context, name, checkTDZ);
+                return factory.createReadProperty(context, globalScope, name);
+            }
+            return factory.createReadLexicalGlobal(name, checkTDZ, context);
+        }
+
+        @Override
+        public JavaScriptNode createWriteNode(JavaScriptNode rhs) {
+            JavaScriptNode globalScope = factory.createGlobalScopeTDZCheck(context, name, checkTDZ);
+            return factory.createWriteProperty(globalScope, name, rhs, required, context, true);
+        }
+
+        @Override
+        public boolean isFunctionLocal() {
+            return function().isGlobal();
+        }
+
+        @Override
+        public FrameSlot getFrameSlot() {
+            return null;
+        }
+
+        @Override
+        public boolean isGlobal() {
+            return true;
+        }
+
+        @Override
+        public boolean isConst() {
+            return isConst;
+        }
+
+        @Override
+        public JavaScriptNode createDeleteNode() {
+            JavaScriptNode element = factory.createConstantString(name);
+            JavaScriptNode object = factory.createGlobalScope(context);
+            return factory.createDeleteProperty(object, element, isStrictMode(), context);
+        }
+
+        @Override
+        public VarRef withRequired(@SuppressWarnings("hiding") boolean required) {
+            if (this.required != required) {
+                return new GlobalLexVarRef(name, isConst, required, checkTDZ);
+            }
+            return this;
+        }
+
+        @Override
+        public VarRef withTDZCheck() {
+            if (!this.checkTDZ) {
+                return new GlobalLexVarRef(name, isConst, required, true);
             }
             return this;
         }

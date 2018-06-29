@@ -53,6 +53,7 @@ import org.graalvm.options.OptionDescriptors;
 import org.graalvm.polyglot.Context;
 
 import com.oracle.truffle.api.CallTarget;
+import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.RootCallTarget;
 import com.oracle.truffle.api.Scope;
@@ -69,15 +70,14 @@ import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.instrumentation.ProvidedTags;
 import com.oracle.truffle.api.instrumentation.StandardTags;
 import com.oracle.truffle.api.interop.ForeignAccess;
+import com.oracle.truffle.api.interop.InteropException;
 import com.oracle.truffle.api.interop.Message;
 import com.oracle.truffle.api.interop.TruffleObject;
-import com.oracle.truffle.api.interop.java.JavaInterop;
 import com.oracle.truffle.api.nodes.DirectCallNode;
 import com.oracle.truffle.api.nodes.ExecutableNode;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.RootNode;
 import com.oracle.truffle.api.object.DynamicObject;
-import com.oracle.truffle.api.object.HiddenKey;
 import com.oracle.truffle.api.source.Source;
 import com.oracle.truffle.api.source.SourceSection;
 import com.oracle.truffle.js.nodes.JavaScriptNode;
@@ -89,23 +89,25 @@ import com.oracle.truffle.js.nodes.instrumentation.JSTags.BuiltinRootTag;
 import com.oracle.truffle.js.nodes.instrumentation.JSTags.ControlFlowBlockTag;
 import com.oracle.truffle.js.nodes.instrumentation.JSTags.ControlFlowBranchTag;
 import com.oracle.truffle.js.nodes.instrumentation.JSTags.ControlFlowRootTag;
-import com.oracle.truffle.js.nodes.instrumentation.JSTags.ReadElementExpressionTag;
-import com.oracle.truffle.js.nodes.instrumentation.JSTags.WriteElementExpressionTag;
-import com.oracle.truffle.js.nodes.instrumentation.JSTags.WritePropertyExpressionTag;
 import com.oracle.truffle.js.nodes.instrumentation.JSTags.EvalCallTag;
 import com.oracle.truffle.js.nodes.instrumentation.JSTags.FunctionCallExpressionTag;
 import com.oracle.truffle.js.nodes.instrumentation.JSTags.LiteralExpressionTag;
 import com.oracle.truffle.js.nodes.instrumentation.JSTags.ObjectAllocationExpressionTag;
+import com.oracle.truffle.js.nodes.instrumentation.JSTags.ReadElementExpressionTag;
 import com.oracle.truffle.js.nodes.instrumentation.JSTags.ReadPropertyExpressionTag;
 import com.oracle.truffle.js.nodes.instrumentation.JSTags.ReadVariableExpressionTag;
 import com.oracle.truffle.js.nodes.instrumentation.JSTags.UnaryExpressionTag;
+import com.oracle.truffle.js.nodes.instrumentation.JSTags.WriteElementExpressionTag;
+import com.oracle.truffle.js.nodes.instrumentation.JSTags.WritePropertyExpressionTag;
 import com.oracle.truffle.js.nodes.instrumentation.JSTags.WriteVariableExpressionTag;
 import com.oracle.truffle.js.nodes.interop.ExportValueNode;
 import com.oracle.truffle.js.parser.env.DebugEnvironment;
 import com.oracle.truffle.js.parser.env.Environment;
-import com.oracle.truffle.js.parser.foreign.InteropBoundFunctionMRForeign;
+import com.oracle.truffle.js.parser.foreign.InteropBoundFunctionForeign;
 import com.oracle.truffle.js.parser.foreign.JSForeignAccessFactoryForeign;
+import com.oracle.truffle.js.parser.foreign.JSMetaObject;
 import com.oracle.truffle.js.runtime.AbstractJavaScriptLanguage;
+import com.oracle.truffle.js.runtime.BigInt;
 import com.oracle.truffle.js.runtime.Evaluator;
 import com.oracle.truffle.js.runtime.JSArguments;
 import com.oracle.truffle.js.runtime.JSContext;
@@ -115,7 +117,6 @@ import com.oracle.truffle.js.runtime.JSInteropRuntime;
 import com.oracle.truffle.js.runtime.JSRealm;
 import com.oracle.truffle.js.runtime.JSRuntime;
 import com.oracle.truffle.js.runtime.JSTruffleOptions;
-import com.oracle.truffle.js.runtime.ParserOptions;
 import com.oracle.truffle.js.runtime.Symbol;
 import com.oracle.truffle.js.runtime.builtins.JSArray;
 import com.oracle.truffle.js.runtime.builtins.JSDate;
@@ -124,11 +125,11 @@ import com.oracle.truffle.js.runtime.builtins.JSSymbol;
 import com.oracle.truffle.js.runtime.builtins.JSUserObject;
 import com.oracle.truffle.js.runtime.objects.JSLazyString;
 import com.oracle.truffle.js.runtime.objects.JSObject;
-import com.oracle.truffle.js.runtime.objects.JSObjectUtil;
 import com.oracle.truffle.js.runtime.objects.Null;
 import com.oracle.truffle.js.runtime.objects.Undefined;
 import com.oracle.truffle.js.runtime.truffleinterop.InteropBoundFunction;
 import com.oracle.truffle.js.runtime.truffleinterop.JSInteropNodeUtil;
+import com.oracle.truffle.js.runtime.truffleinterop.JSInteropUtil;
 
 @ProvidedTags({StandardTags.CallTag.class,
                 StandardTags.StatementTag.class,
@@ -158,10 +159,9 @@ import com.oracle.truffle.js.runtime.truffleinterop.JSInteropNodeUtil;
 @TruffleLanguage.Registration(id = JavaScriptLanguage.ID, name = JavaScriptLanguage.NAME, version = JavaScriptLanguage.VERSION_NUMBER, mimeType = {
                 JavaScriptLanguage.APPLICATION_MIME_TYPE, JavaScriptLanguage.TEXT_MIME_TYPE})
 public class JavaScriptLanguage extends AbstractJavaScriptLanguage {
-    private static final HiddenKey META_OBJECT_KEY = new HiddenKey("meta object");
+    private static final int MAX_TOSTRING_DEPTH = 10;
 
-    private final Map<ParserOptions, Queue<JSContext>> contextPools = new ConcurrentHashMap<>();
-    private volatile Boolean useContextPool;
+    private final Map<JSContextOptions, Queue<JSContext>> contextPools = new ConcurrentHashMap<>();
 
     public static final OptionDescriptors OPTION_DESCRIPTORS;
     static {
@@ -173,7 +173,7 @@ public class JavaScriptLanguage extends AbstractJavaScriptLanguage {
 
     @Override
     public boolean isObjectOfLanguage(Object o) {
-        return JSObject.isJSObject(o) || o instanceof Symbol || o instanceof JSLazyString || o instanceof InteropBoundFunction;
+        return JSObject.isJSObject(o) || o instanceof Symbol || o instanceof JSLazyString || o instanceof InteropBoundFunction || o instanceof JSMetaObject;
     }
 
     @TruffleBoundary
@@ -189,22 +189,16 @@ public class JavaScriptLanguage extends AbstractJavaScriptLanguage {
                 return createEmptyScript(context).getCallTarget();
             }
 
-            Object cached = context.getCodeCache().get(source);
-            if (cached != null) {
-                return (CallTarget) cached;
-            }
-
             final ScriptNode program = parseInContext(source, context);
 
             RootNode rootNode = new RootNode(this) {
                 @Child private DirectCallNode directCallNode = DirectCallNode.create(program.getCallTarget());
-                @Child private ExportValueNode exportValueNode = ExportValueNode.create();
+                @Child private ExportValueNode exportValueNode = ExportValueNode.create(context);
 
                 @Override
                 public Object execute(VirtualFrame frame) {
                     JSRealm realm = getContextReference().get();
-                    JSContext currentContext = realm.getContext();
-                    assert currentContext == context : "unexpected JSContext";
+                    assert realm.getContext() == context : "unexpected JSContext";
                     try {
                         context.interopBoundaryEnter();
                         Object result = directCallNode.call(program.argumentsToRun(realm));
@@ -219,9 +213,7 @@ public class JavaScriptLanguage extends AbstractJavaScriptLanguage {
                     return true;
                 }
             };
-            CallTarget callTarget = Truffle.getRuntime().createCallTarget(rootNode);
-            context.getCodeCache().putIfAbsent(source, callTarget);
-            return callTarget;
+            return Truffle.getRuntime().createCallTarget(rootNode);
         } else {
             RootNode rootNode = parseWithArgumentNames(source, argumentNames);
             return Truffle.getRuntime().createCallTarget(rootNode);
@@ -240,12 +232,11 @@ public class JavaScriptLanguage extends AbstractJavaScriptLanguage {
         final JSContext context = getContextReference().get().getContext();
         final ExecutableNode executableNode = new ExecutableNode(this) {
             @Child private JavaScriptNode expression = insert(parseInline(source, context, requestFrame));
-            @Child private ExportValueNode exportValueNode = ExportValueNode.create();
+            @Child private ExportValueNode exportValueNode = ExportValueNode.create(context);
 
             @Override
             public Object execute(VirtualFrame frame) {
-                JSContext currentContext = getContextReference().get().getContext();
-                assert currentContext == context : "unexpected JSContext";
+                assert getContextReference().get().getContext() == context : "unexpected JSContext";
                 Object result = expression.execute(frame);
                 return exportValueNode.executeWithTarget(result, Undefined.instance);
             }
@@ -286,28 +277,37 @@ public class JavaScriptLanguage extends AbstractJavaScriptLanguage {
     @TruffleBoundary
     @Override
     protected String toString(JSRealm realm, Object value) {
+        return toStringIntl(realm, value, 0);
+    }
+
+    protected String toStringIntl(JSRealm realm, Object value, int inDepth) {
+        int depth = inDepth + 1;
+        if (depth >= MAX_TOSTRING_DEPTH) {
+            return "..."; // bail-out from recursions or deep nesting
+        }
         if (value == null) {
             return "null";
-        } else if (JSObject.isJSObject(value)) {
-            DynamicObject object = (DynamicObject) value;
-            if (object.containsKey(META_OBJECT_KEY)) {
-                Object type = JSObject.get(object, "className");
-                if (type == Undefined.instance) {
-                    type = JSObject.get(object, "type");
-                }
-                return type.toString();
+        } else if (value instanceof JSMetaObject) {
+            String type = ((JSMetaObject) value).getClassName();
+            if (type == null) {
+                type = ((JSMetaObject) value).getType();
             }
+            return type;
         } else if (value instanceof Symbol) {
             return value.toString();
         } else if (value instanceof JSLazyString) {
             return value.toString();
-        } else if (value instanceof TruffleObject) {
+        } else if (value instanceof BigInt) {
+            return value.toString() + "n";
+        } else if (value instanceof TruffleObject && !JSObject.isJSObject(value)) {
             TruffleObject truffleObject = (TruffleObject) value;
+            Env env = realm.getEnv();
             try {
-                if (JavaInterop.isJavaObject(truffleObject)) {
-                    Class<?> clazz = JavaInterop.asJavaObject(Class.class, JavaInterop.toJavaClass(truffleObject));
+                if (env.isHostObject(truffleObject)) {
+                    Object hostObject = env.asHostObject(truffleObject);
+                    Class<?> clazz = hostObject.getClass();
                     if (clazz == Class.class) {
-                        clazz = JavaInterop.asJavaObject(Class.class, truffleObject);
+                        clazz = (Class<?>) hostObject;
                         return "JavaClass[" + clazz.getTypeName() + "]";
                     } else {
                         return "JavaObject[" + clazz.getTypeName() + "]";
@@ -318,16 +318,23 @@ public class JavaScriptLanguage extends AbstractJavaScriptLanguage {
                     long pointer = ForeignAccess.sendAsPointer(Message.AS_POINTER.createNode(), truffleObject);
                     return "Pointer[0x" + Long.toHexString(pointer) + "]";
                 } else if (ForeignAccess.sendHasSize(Message.HAS_SIZE.createNode(), truffleObject)) {
-                    List<?> list = JavaInterop.asJavaObject(List.class, truffleObject);
-                    return "Array" + list.toString();
+                    return "Array" + foreignArrayToString(realm, truffleObject, depth);
                 } else if (ForeignAccess.sendIsExecutable(Message.IS_EXECUTABLE.createNode(), truffleObject)) {
                     return "Executable";
+                } else if (ForeignAccess.sendIsBoxed(Message.IS_BOXED.createNode(), truffleObject)) {
+                    return toStringIntl(realm, ForeignAccess.sendUnbox(Message.UNBOX.createNode(), truffleObject), depth);
                 } else {
-                    Map<?, ?> map = JavaInterop.asJavaObject(Map.class, truffleObject);
-                    return "Object" + map.toString();
+                    return "Object" + foreignObjectToString(realm, truffleObject, depth);
                 }
             } catch (Exception e) {
                 return "Object";
+            }
+        }
+        if (value instanceof Double && ((Double) value) == 0d) {
+            if (Double.doubleToLongBits((Double) value) != 0) {
+                return "-0";
+            } else {
+                return "0";
             }
         }
         return JSRuntime.safeToString(value);
@@ -385,15 +392,13 @@ public class JavaScriptLanguage extends AbstractJavaScriptLanguage {
 
     @Override
     protected JSRealm createContext(Env env) {
-        if (useContextPool == null) {
-            useContextPool = JSContextOptions.CODE_SHARING.getValue(env.getOptions()).equals("pool");
-        }
-
         JSContext languageContext = null;
         TruffleContext parent = env.getContext().getParent();
         if (parent == null) {
-            if (useContextPool() && !contextPools.isEmpty()) {
-                languageContext = pollContextPool(GraalJSParserOptions.fromOptions(env.getOptions()));
+            if (useContextPool(env) && !contextPools.isEmpty()) {
+                JSContextOptions options = new JSContextOptions(new GraalJSParserOptions());
+                options.setEnv(env);
+                languageContext = pollContextPool(options);
             }
             if (languageContext == null) {
                 languageContext = newJSContext(env);
@@ -428,7 +433,7 @@ public class JavaScriptLanguage extends AbstractJavaScriptLanguage {
             context.setLocalTimeZoneId(TimeZone.getTimeZone(JSContextOptions.TIME_ZONE.getValue(env.getOptions())).toZoneId());
         }
 
-        context.setInteropRuntime(new JSInteropRuntime(JSForeignAccessFactoryForeign.ACCESS, InteropBoundFunctionMRForeign.ACCESS));
+        context.setInteropRuntime(new JSInteropRuntime(JSForeignAccessFactoryForeign.ACCESS, InteropBoundFunctionForeign.ACCESS));
         return context;
     }
 
@@ -437,7 +442,7 @@ public class JavaScriptLanguage extends AbstractJavaScriptLanguage {
         realm.setArguments(realm.getEnv().getApplicationArguments());
 
         if (((GraalJSParserOptions) realm.getContext().getParserOptions()).isScripting()) {
-            realm.addScriptingOptionsObject();
+            realm.addScriptingObjects();
         }
     }
 
@@ -462,36 +467,36 @@ public class JavaScriptLanguage extends AbstractJavaScriptLanguage {
             context.setLocalTimeZoneId(TimeZone.getTimeZone(JSContextOptions.TIME_ZONE.getValue(newEnv.getOptions())).toZoneId());
         }
 
-        context.setInteropRuntime(new JSInteropRuntime(JSForeignAccessFactoryForeign.ACCESS, InteropBoundFunctionMRForeign.ACCESS));
+        context.setInteropRuntime(new JSInteropRuntime(JSForeignAccessFactoryForeign.ACCESS, InteropBoundFunctionForeign.ACCESS));
         realm.setArguments(newEnv.getApplicationArguments());
 
         if (((GraalJSParserOptions) context.getParserOptions()).isScripting()) {
-            realm.addScriptingOptionsObject();
+            realm.addScriptingObjects();
         }
         return true;
     }
 
     @Override
     protected void disposeContext(JSRealm realm) {
-        if (useContextPool() && !realm.isChildRealm()) {
+        if (useContextPool(realm.getEnv()) && !realm.isChildRealm()) {
             JSContext context = realm.getContext();
-            Queue<JSContext> contextPool = getContextPool(context.getParserOptions());
+            Queue<JSContext> contextPool = getContextPool(context.getContextOptions());
             assert !contextPool.contains(context);
             contextPool.offer(context);
         }
     }
 
-    private Queue<JSContext> getContextPool(ParserOptions configKey) {
+    private Queue<JSContext> getContextPool(JSContextOptions configKey) {
         return contextPools.computeIfAbsent(configKey, k -> new ConcurrentLinkedQueue<>());
     }
 
-    private JSContext pollContextPool(ParserOptions configKey) {
+    private JSContext pollContextPool(JSContextOptions configKey) {
         Queue<JSContext> contextPool = contextPools.get(configKey);
         return contextPool == null ? null : contextPool.poll();
     }
 
-    private boolean useContextPool() {
-        return useContextPool;
+    private static boolean useContextPool(Env env) {
+        return JSContextOptions.CODE_SHARING.getValue(env.getOptions()).equals("pool");
     }
 
     @Override
@@ -506,9 +511,10 @@ public class JavaScriptLanguage extends AbstractJavaScriptLanguage {
         String subtype = null;
         String className = null;
         String description;
-        JSContext context = realm.getContext();
 
-        if (JSObject.isJSObject(value)) {
+        if (value instanceof JSMetaObject) {
+            return "metaobject";
+        } else if (JSObject.isJSObject(value)) {
             DynamicObject obj = (DynamicObject) value;
             type = "object";
             description = JSObject.safeToString(obj);
@@ -520,7 +526,9 @@ public class JavaScriptLanguage extends AbstractJavaScriptLanguage {
                     func = JSFunction.getBoundTargetFunction(func);
                 }
                 description = JSObject.safeToString(func);
+                type = "function";
             } else if (JSArray.isJSArray(obj)) {
+                subtype = "array";
                 description = JSArray.CLASS_NAME + "[" + JSArray.arrayGetLength(obj) + "]";
             } else if (JSDate.isJSDate(obj)) {
                 subtype = "date";
@@ -533,6 +541,7 @@ public class JavaScriptLanguage extends AbstractJavaScriptLanguage {
                 type = "undefined";
                 description = "undefined";
             } else if (value == Null.instance) {
+                subtype = "null";
                 description = "null";
             } else if (JSUserObject.isJSUserObject(obj)) {
                 description = className;
@@ -542,8 +551,6 @@ public class JavaScriptLanguage extends AbstractJavaScriptLanguage {
             TruffleObject truffleObject = (TruffleObject) value;
             if (JSInteropNodeUtil.isBoxed(truffleObject)) {
                 return findMetaObject(realm, JSInteropNodeUtil.unbox(truffleObject));
-            } else if (JavaInterop.isJavaObject(Symbol.class, truffleObject)) {
-                return findMetaObject(realm, JavaInterop.asJavaObject(truffleObject));
             } else if (value instanceof InteropBoundFunction) {
                 return findMetaObject(realm, ((InteropBoundFunction) value).getFunction());
             }
@@ -559,24 +566,11 @@ public class JavaScriptLanguage extends AbstractJavaScriptLanguage {
             if (value instanceof Symbol) {
                 description = "Symbol(" + ((Symbol) value).getName() + ")";
             } else {
-                description = JSRuntime.toString(value);
+                description = toString(realm, value);
             }
         }
 
-        // avoid allocation profiling
-        DynamicObject metaObject = realm.getInitialUserObjectShape().newInstance();
-        JSObjectUtil.putDataProperty(context, metaObject, "type", type);
-        if (subtype != null) {
-            JSObjectUtil.putDataProperty(context, metaObject, "subtype", subtype);
-        }
-        if (className != null) {
-            JSObjectUtil.putDataProperty(context, metaObject, "className", className);
-        }
-        if (description != null) {
-            JSObjectUtil.putDataProperty(context, metaObject, "description", description);
-        }
-        metaObject.define(META_OBJECT_KEY, true);
-        return metaObject;
+        return new JSMetaObject(type, subtype, className, description, realm.getEnv());
     }
 
     @Override
@@ -603,7 +597,7 @@ public class JavaScriptLanguage extends AbstractJavaScriptLanguage {
 
     @Override
     protected Iterable<Scope> findLocalScopes(JSRealm realm, Node node, Frame frame) {
-        return JSScope.createLocalScopes(node, frame.materialize());
+        return JSScope.createLocalScopes(node, frame == null ? null : frame.materialize());
     }
 
     @Override
@@ -623,5 +617,53 @@ public class JavaScriptLanguage extends AbstractJavaScriptLanguage {
         } finally {
             context.leave();
         }
+    }
+
+    private String foreignArrayToString(JSRealm realm, TruffleObject truffleObject, int depth) throws InteropException {
+        CompilerAsserts.neverPartOfCompilation();
+        assert ForeignAccess.sendHasSize(JSInteropUtil.createHasSize(), truffleObject);
+        int size = ((Number) ForeignAccess.sendGetSize(JSInteropUtil.createGetSize(), truffleObject)).intValue();
+        if (size == 0) {
+            return "[]";
+        }
+        Node readNode = JSInteropUtil.createRead();
+        StringBuilder sb = new StringBuilder();
+        sb.append('[');
+        for (int i = 0; i < size; i++) {
+            Object value = ForeignAccess.sendRead(readNode, truffleObject, i);
+            sb.append(value == truffleObject ? "(this)" : toStringIntl(realm, value, depth));
+            if (i + 1 < size) {
+                sb.append(',').append(' ');
+            }
+        }
+        sb.append(']');
+        return sb.toString();
+    }
+
+    private String foreignObjectToString(JSRealm realm, TruffleObject truffleObject, int depth) throws InteropException {
+        CompilerAsserts.neverPartOfCompilation();
+        if (!ForeignAccess.sendHasKeys(JSInteropUtil.createHasKeys(), truffleObject)) {
+            return "";
+        }
+        TruffleObject keys = ForeignAccess.sendKeys(JSInteropUtil.createKeys(), truffleObject);
+        int keyCount = ((Number) ForeignAccess.sendGetSize(JSInteropUtil.createGetSize(), keys)).intValue();
+        if (keyCount == 0) {
+            return "{}";
+        }
+        Node readNode = JSInteropUtil.createRead();
+        StringBuilder sb = new StringBuilder();
+        sb.append('{');
+        for (int i = 0; i < keyCount; i++) {
+            Object key = ForeignAccess.sendRead(readNode, keys, i);
+            Object value = ForeignAccess.sendRead(readNode, truffleObject, key);
+            sb.append(toStringIntl(realm, key, depth));
+            sb.append('=');
+            sb.append(value == truffleObject ? "(this)" : toStringIntl(realm, value, depth));
+            if (i + 1 < keyCount) {
+                sb.append(',').append(' ');
+            }
+        }
+        sb.append('}');
+        return sb.toString();
     }
 }

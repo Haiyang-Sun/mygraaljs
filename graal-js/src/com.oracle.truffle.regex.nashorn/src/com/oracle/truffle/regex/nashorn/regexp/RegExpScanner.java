@@ -61,15 +61,17 @@ package com.oracle.truffle.regex.nashorn.regexp;
 
 // @formatter:off
 
+import java.util.Deque;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Predicate;
 import java.util.regex.PatternSyntaxException;
 
 import com.oracle.truffle.regex.nashorn.parser.Scanner;
-import com.oracle.truffle.regex.nashorn.runtime.BitVector;
+import com.oracle.truffle.regex.tregex.parser.CodePointSet;
+import com.oracle.truffle.regex.tregex.parser.UnicodeCharacterProperties;
 
 /**
  * Scan a JavaScript regexp, converting to Java regex if necessary.
@@ -88,14 +90,17 @@ public final class RegExpScanner extends Scanner {
     /** Capturing parenthesis that have been found so far. */
     private final List<Capture> caps = new LinkedList<>();
 
-    /** Forward references to capturing parenthesis to be resolved later.*/
-    private final LinkedList<Integer> forwardReferences = new LinkedList<>();
+    /** Map from named capture group names to their (1-based) indices. */
+    private final Map<String, Integer> namedCaptureGroups = new HashMap<>();
 
-    /** Current level of zero-width negative lookahead assertions. */
-    private int negLookaheadLevel;
+    /** Forward references to capture groups to be resolved later. */
+    private final Deque<ForwardReference> forwardReferences = new LinkedList<>();
 
-    /** Sequential id of current top-level zero-width negative lookahead assertion. */
-    private int negLookaheadGroup;
+    /** Current level of zero-width negative lookaround assertions. */
+    private int negLookaroundLevel;
+
+    /** Sequential id of current top-level zero-width negative lookaround assertion. */
+    private int negLookaroundGroup;
 
     /** Are we currently inside a character class? */
     private boolean inCharClass = false;
@@ -104,23 +109,58 @@ public final class RegExpScanner extends Scanner {
     private boolean inNegativeClass = false;
 
     /** Was the last assertion a lookahead? Required for V8 compatibility. */
-    private boolean lastAssertionWasLookeahead = false;
+    private boolean lastAssertionWasLookahead = false;
 
     private static final String NON_IDENT_ESCAPES = "$^*+(){}[]|\\.?-";
 
-    private static class Capture {
-        /** Zero-width negative lookaheads enclosing the capture. */
-        private final int negLookaheadLevel;
-        /** Sequential id of top-level negative lookaheads containing the capture. */
-        private  final int negLookaheadGroup;
+    private static final CodePointSet ID_START = UnicodeCharacterProperties.getProperty("ID_Start");
+    private static final CodePointSet ID_CONTINUE = UnicodeCharacterProperties.getProperty("ID_Continue");
 
-        Capture(final int negLookaheadGroup, final int negLookaheadLevel) {
-            this.negLookaheadGroup = negLookaheadGroup;
-            this.negLookaheadLevel = negLookaheadLevel;
+    private static class Capture {
+        /** Zero-width negative lookarounds enclosing the capture. */
+        private final int negLookaroundLevel;
+        /** Sequential id of top-level negative lookarounds containing the capture. */
+        private  final int negLookaroundGroup;
+
+        Capture(final int negLookaroundGroup, final int negLookaroundLevel) {
+            this.negLookaroundGroup = negLookaroundGroup;
+            this.negLookaroundLevel = negLookaroundLevel;
         }
 
         boolean isContained(final int group, final int level) {
-            return negLookaheadLevel == 0 || (group == this.negLookaheadGroup && level >= this.negLookaheadLevel);
+            return negLookaroundLevel == 0 || (group == this.negLookaroundGroup && level >= this.negLookaroundLevel);
+        }
+    }
+
+    private static class ForwardReference {
+        /** The position in the output regex where the resolved reference should be put. */
+        public final int outPos;
+
+        protected ForwardReference(int outPos) {
+            this.outPos = outPos;
+        }
+    }
+
+    private static class IndexedForwardReference extends ForwardReference {
+        /** The index of the capture group being referenced. */
+        public final int index;
+
+        IndexedForwardReference(int outPos, int index) {
+            super(outPos);
+            this.index = index;
+        }
+    }
+
+    private static class NamedForwardReference extends ForwardReference {
+        /** The name of the named capture group being referenced. */
+        public final String name;
+        /** The position in the input regex where the forward reference was found. */
+        public final int inPos;
+
+        NamedForwardReference(int outPos, int inPos, String name) {
+            super(outPos);
+            this.inPos = inPos;
+            this.name = name;
         }
     }
 
@@ -137,21 +177,39 @@ public final class RegExpScanner extends Scanner {
     }
 
     private void processForwardReferences() {
-
-        Iterator<Integer> iterator = forwardReferences.descendingIterator();
-        while (iterator.hasNext()) {
-            final int pos = iterator.next();
-            final int num = iterator.next();
-            if (num > caps.size()) {
-                // Non-existing backreference. If the number begins with a valid octal convert it to
-                // Unicode escape and append the rest to a literal character sequence.
-                final StringBuilder buffer = new StringBuilder();
-                octalOrLiteral(Integer.toString(num), buffer);
-                sb.insert(pos, buffer);
+        while (!forwardReferences.isEmpty()) {
+            final ForwardReference fwdRef = forwardReferences.pop();
+            final int pos = fwdRef.outPos;
+            if (fwdRef instanceof IndexedForwardReference) {
+                final int num = ((IndexedForwardReference)fwdRef).index;
+                if (num > caps.size()) {
+                    // Non-existing backreference. If the number begins with a valid octal convert
+                    // it to Unicode escape and append the rest to a literal character sequence.
+                    final StringBuilder buffer = new StringBuilder();
+                    octalOrLiteral(Integer.toString(num), buffer);
+                    sb.insert(pos, buffer);
+                }
+            } else if (fwdRef instanceof NamedForwardReference) {
+                final NamedForwardReference namedFwdRef = (NamedForwardReference)fwdRef;
+                final String name = namedFwdRef.name;
+                if (namedCaptureGroups.containsKey(name)) {
+                    sb.insert(pos, "\\" + namedCaptureGroups.get(name));
+                } else if (namedCaptureGroups.isEmpty()) {
+                    // Reinterpret the string "\\k<groupName>" as a regular expression without
+                    // recognizing named capture group references. We do so by removing the
+                    // backslash preceding 'k'. The contents of 'groupName' are safe, since the only
+                    // syntax character they can contain is '$', which has the same meaning in
+                    // ECMAScript and Java regular expressions.
+                    sb.insert(pos, String.format("k<%s>", name));
+                } else {
+                    // The regular expression contains named capture groups. According to the
+                    // ECMAScript 2018 specification, this means it should be parsed with the [+N]
+                    // option, which prohibits the \k identity escape. This means that we cannot
+                    // reinterpret this reference as some other piece of RegExp syntax.
+                    throw new PatternSyntaxException("unresolved named backreference", getContents(), namedFwdRef.inPos);
+                }
             }
         }
-
-        forwardReferences.clear();
     }
 
     /**
@@ -174,8 +232,7 @@ public final class RegExpScanner extends Scanner {
 
         // Throw syntax error unless we parsed the entire JavaScript regexp without syntax errors
         if (scanner.position != string.length()) {
-            final String p = scanner.getStringBuilder().toString();
-            throw new PatternSyntaxException(string, p, p.length() + 1);
+            throw new PatternSyntaxException("cannot parse regular expression", string, scanner.position);
         }
 
         return scanner;
@@ -187,20 +244,6 @@ public final class RegExpScanner extends Scanner {
 
     public String getJavaPattern() {
         return sb.toString();
-    }
-
-    BitVector getGroupsInNegativeLookahead() {
-        BitVector vec = null;
-        for (int i = 0; i < caps.size(); i++) {
-            final Capture cap = caps.get(i);
-            if (cap.negLookaheadLevel > 0) {
-                if (vec == null) {
-                    vec = new BitVector(caps.size() + 1);
-                }
-                vec.set(i + 1);
-            }
-        }
-        return vec;
     }
 
     /**
@@ -298,7 +341,7 @@ public final class RegExpScanner extends Scanner {
         if (assertion()) {
             // For compatability with JSC and ES3, V8 allows quantifiers after lookaheads
             // warning: this is out of the ES 262 spec
-            if (lastAssertionWasLookeahead) {
+            if (lastAssertionWasLookahead) {
                 quantifier();
             }
             return true;
@@ -321,11 +364,13 @@ public final class RegExpScanner extends Scanner {
      *      \B
      *      ( ? = Disjunction )
      *      ( ? ! Disjunction )
+     *      ( ? <= Disjunction )
+     *      ( ? <! Disjunction )
      */
     private boolean assertion() {
         final int startIn  = position;
         final int startOut = sb.length();
-        lastAssertionWasLookeahead = false;
+        lastAssertionWasLookahead = false;
 
         switch (ch0) {
         case '^':
@@ -342,29 +387,33 @@ public final class RegExpScanner extends Scanner {
             if (ch1 != '?') {
                 break;
             }
-            if (ch2 != '=' && ch2 != '!') {
+            commit(2); // commit "(?"
+            final boolean lookbehind = ch0 == '<';
+            if (lookbehind) {
+                commit(1); // commit "<"
+            }
+            if (ch0 != '=' && ch0 != '!') {
                 break;
             }
-            final boolean isNegativeLookahead = (ch2 == '!');
-            commit(3);
+            final boolean isNegativeLookaround = (ch0 == '!');
+            commit(1); // commit "=" or "!"
 
-            if (isNegativeLookahead) {
-                if (negLookaheadLevel == 0) {
-                    negLookaheadGroup++;
+            if (isNegativeLookaround) {
+                if (negLookaroundLevel == 0) {
+                    negLookaroundGroup++;
                 }
-                negLookaheadLevel++;
+                negLookaroundLevel++;
             }
             disjunction();
-            if (isNegativeLookahead) {
-                negLookaheadLevel--;
+            if (isNegativeLookaround) {
+                negLookaroundLevel--;
             }
 
             if (ch0 == ')') {
-                lastAssertionWasLookeahead = true;
+                lastAssertionWasLookahead = !lookbehind;
                 return commit(1);
             }
             break;
-
         default:
             break;
         }
@@ -446,9 +495,8 @@ public final class RegExpScanner extends Scanner {
      *      .
      *      \ AtomEscape
      *      CharacterClass
-     *      ( Disjunction )
+     *      ( GroupSpecifier Disjunction )
      *      ( ? : Disjunction )
-     *
      */
     private boolean atom() {
         final int startIn  = position;
@@ -479,7 +527,8 @@ public final class RegExpScanner extends Scanner {
             if (ch0 == '?' && ch1 == ':') {
                 commit(2);
             } else {
-                caps.add(new Capture(negLookaheadGroup, negLookaheadLevel));
+                caps.add(new Capture(negLookaroundGroup, negLookaroundLevel));
+                groupSpecifier();
             }
 
             disjunction();
@@ -539,23 +588,57 @@ public final class RegExpScanner extends Scanner {
         }
     }
 
+    private void handleBackReference(int groupIndex) {
+        //  Captures inside a negative lookaround are undefined when referenced from the outside.
+        if (!caps.get(groupIndex - 1).isContained(negLookaroundGroup, negLookaroundLevel)) {
+            // Reference to capture in negative lookaround, omit from output buffer.
+            sb.setLength(sb.length() - 1); // delete the backslash from the output
+        } else {
+            // Append backreference to output buffer.
+            sb.append(groupIndex);
+        }
+    }
+
     /*
      * AtomEscape ::
      *      DecimalEscape
-     *      CharacterEscape
      *      CharacterClassEscape
+     *      CharacterEscape
+     *      k GroupName
      */
     private boolean atomEscape() {
-        // Note that contrary to ES 5.1 spec we put identityEscape() last because it acts as a catch-all
-        return decimalEscape() || characterClassEscape() || characterEscape() || identityEscape();
+        final int startIn  = position;
+        final int startOut = sb.length();
+
+        if (ch0 == 'k') {
+            skip(1);
+            StringBuilder nameSB = new StringBuilder();
+            if (groupName(nameSB)) {
+                String name = nameSB.toString();
+                if (namedCaptureGroups.containsKey(name)) {
+                    int groupIndex = namedCaptureGroups.get(name);
+                    handleBackReference(groupIndex);
+                } else {
+                    sb.setLength(sb.length() - 1); // delete the backslash
+                    forwardReferences.push(new NamedForwardReference(sb.length(), startIn - 1, name));
+                }
+                return true;
+            } else {
+                restart(startIn, startOut);
+            }
+        }
+
+        return decimalEscape() || characterClassEscape() || characterEscape();
     }
 
     /*
      * CharacterEscape ::
      *      ControlEscape
      *      c ControlLetter
+     *      0 [lookahead not in DecimalDigit]
      *      HexEscapeSequence
      *      UnicodeEscapeSequence
+     *      LegacyOctalEscapeSequence
      *      IdentityEscape
      */
     private boolean characterEscape() {
@@ -574,7 +657,13 @@ public final class RegExpScanner extends Scanner {
             restart(startIn, startOut);
         }
 
-        if (hexEscapeSequence() || unicodeEscapeSequence()) {
+        if (ch0 == '0' && !isDecimalDigit(ch1)) {
+            skip(1);
+            unicode(0, sb);
+            return true;
+        }
+
+        if (hexEscapeSequence() || unicodeEscapeSequence() || legacyOctalEscapeSequence() || identityEscape()) {
             return true;
         }
 
@@ -610,6 +699,40 @@ public final class RegExpScanner extends Scanner {
 
     private boolean unicodeEscapeSequence() {
         return scanEscapeSequence('u', 4);
+    }
+
+    /*
+     * LegacyOctalEscapeSequence ::
+     *      OctalDigit [lookahead not in OctalDigit]
+     *      ZeroToThree OctalDigit [lookahead not in OctalDigit]
+     *      FourToSeven OctalDigit
+     *      ZeroToThree OctalDigit OctalDigit
+     *
+     * ZeroToThree :: one of
+     *      0 1 2 3
+     *
+     * FourToSeven :: one of
+     *      4 5 6 7
+     */
+    private boolean legacyOctalEscapeSequence() {
+        final int startIn  = position;
+        final int startOut = sb.length();
+
+        int octalValue = 0;
+        // Maximum value for octal escape is 377 (255) so we stop the loop at 32
+        // (because 32 * 8 = 256)
+        while (isOctalDigit(ch0) && octalValue < 32 && position < startIn + 3) {
+            octalValue = octalValue * 8 + ch0 - '0';
+            skip(1);
+        }
+
+        if (position > startIn) {
+            unicode(octalValue, sb);
+            return true;
+        } else {
+            restart(startIn, startOut);
+            return false;
+        }
     }
 
     /*
@@ -651,6 +774,136 @@ public final class RegExpScanner extends Scanner {
     }
 
     /*
+     * GroupSpecifier ::
+     *      [empty]
+     *      ? GroupName
+     *
+     * Note that this translation replaces named capture groups to unnamed capture groups (Java
+     * regular expressions only allow alphanumeric ASCII characters, whereas JavaScript regular
+     * expressions use Unicode identifers).
+     */
+    private void groupSpecifier() {
+        final int startIn  = position;
+        final int startOut = sb.length();
+
+        if (ch0 == '?') {
+            skip(1);
+            StringBuilder name = new StringBuilder();
+            if (groupName(name)) {
+                namedCaptureGroups.put(name.toString(), caps.size());
+            } else {
+                restart(startIn, startOut);
+            }
+        }
+    }
+
+    /*
+     * GroupName ::
+     *      < RegExpIdentifierName >
+     *
+     * Instead of appending the group name to the resulting regular expression, we write it to the
+     * provided StringBuilder instance.
+     */
+    private boolean groupName(StringBuilder nameBuilder) {
+        final int startIn  = position;
+        final int startOut = sb.length();
+
+        if (ch0 == '<') {
+            skip(1);
+            if (regExpIdentifierName(nameBuilder)) {
+                if (ch0 == '>') {
+                    skip(1);
+                    return true;
+                }
+            }
+        }
+
+        restart(startIn, startOut);
+        return false;
+    }
+
+    /*
+     * RegExpIdentifierName ::
+     *      RegExpIdentifierStart
+     *      RegExpIdentifierName RegExpIdentifierPart
+     *
+     * The name is appended to the provided StringBuilder instead of the resulting regex.
+     */
+    private boolean regExpIdentifierName(StringBuilder nameBuilder) {
+        final int startIn  = position;
+        final int startOut = sb.length();
+
+        if (regExpIdentifierStart(nameBuilder)) {
+            while (regExpIdentifierPart(nameBuilder)) {
+                // do nothing
+            }
+
+            return true;
+        }
+
+        restart(startIn, startOut);
+        return false;
+    }
+
+    /**
+     * Helper method for {@link #regExpIdentifierStart} and {@link #regExpIdentifierPart}. Parses
+     * an element of a RegExpIdentifierName, storing it in the supplied {@link StringBuilder}. Any
+     * candidate character must pass the {@code allowedChars} {@link Predicate}.
+     */
+    private boolean regExpIdentifierElement(StringBuilder nameBuilder, Predicate<Character> allowedChars) {
+        final int startIn  = position;
+        final int startOut = sb.length();
+
+        char codeUnit = '\0';
+        if (ch0 == '\\') {
+            skip(1);
+            if (unicodeEscapeSequence()) {
+                String hexSequence = sb.substring(sb.length() - 4);
+                sb.setLength(sb.length() - 6); // delete "\\uXXXX"
+                codeUnit = (char) Integer.parseInt(hexSequence, 16);
+            }
+        } else {
+            codeUnit = ch0;
+            skip(1);
+        }
+
+        if (allowedChars.test(codeUnit)) {
+            nameBuilder.append(codeUnit);
+            return true;
+        } else {
+            restart(startIn, startOut);
+            return false;
+        }
+    }
+
+    /*
+     * RegExpIdentifierStart ::
+     *      UnicodeIDStart
+     *      $
+     *      _
+     *      \ RegExpUnicodeEscapeSequence
+     *
+     * The character is appended to the provided StringBuilder instead of the resulting regex.
+     */
+    private boolean regExpIdentifierStart(StringBuilder nameBuilder) {
+        return regExpIdentifierElement(nameBuilder, c -> ID_START.contains(c) || c == '$' || c == '_');
+    }
+
+    /*
+     * RegExpIdentifierPart ::
+     *      UnicodeIDContinue
+     *      $
+     *      \ RegExpUnicodeEscapeSequence
+     *      <ZWNJ>
+     *      <ZWJ>
+     *
+     * The character is appended to the provided StringBuilder instead of the resulting regex.
+     */
+    private boolean regExpIdentifierPart(StringBuilder nameBuilder) {
+        return regExpIdentifierElement(nameBuilder, c -> ID_CONTINUE.contains(c) || c == '$' || c == '\u200c' || c == '\u200d');
+    }
+
+    /*
      * IdentityEscape ::
      *      SourceCharacter but not IdentifierPart
      *      <ZWJ>  (200c)
@@ -671,61 +924,33 @@ public final class RegExpScanner extends Scanner {
 
     /*
      * DecimalEscape ::
-     *      DecimalIntegerLiteral [lookahead DecimalDigit]
+     *      NonZeroDigit DecimalDigits_opt [lookahead not in DecimalDigit]
      */
     private boolean decimalEscape() {
         final int startIn  = position;
         final int startOut = sb.length();
 
-        if (ch0 == '0' && !isOctalDigit(ch1)) {
-            skip(1);
-            //  DecimalEscape :: 0. If i is zero, return the EscapeValue consisting of a <NUL> character (Unicodevalue0000);
-            sb.append("\u0000");
-            return true;
-        }
+        if (isDecimalDigit(ch0) && ch0 != '0') {
+            // This should be a backreference, but could also be an octal escape or even a literal string.
+            int decimalValue = 0;
+            while (isDecimalDigit(ch0)) {
+                decimalValue = decimalValue * 10 + ch0 - '0';
+                skip(1);
+            }
 
-        if (isDecimalDigit(ch0)) {
+            if (inCharClass) {
+                // No backreferences in character classes. Encode as unicode escape or literal char sequence
+                sb.setLength(sb.length() - 1);
+                octalOrLiteral(Integer.toString(decimalValue), sb);
 
-            if (ch0 == '0') {
-                // Convert octal escape to unicode escape
-                int octalValue = 0;
-                while (isOctalDigit(ch0)) {
-                    octalValue = octalValue * 8 + ch0 - '0';
-                    skip(1);
-                }
-
-                unicode(octalValue, sb);
+            } else if (decimalValue <= caps.size()) {
+                handleBackReference(decimalValue);
             } else {
-                // This should be a backreference, but could also be an octal escape or even a literal string.
-                int decimalValue = 0;
-                while (isDecimalDigit(ch0)) {
-                    decimalValue = decimalValue * 10 + ch0 - '0';
-                    skip(1);
-                }
-
-                if (inCharClass) {
-                    // No backreferences in character classes. Encode as unicode escape or literal char sequence
-                    sb.setLength(sb.length() - 1);
-                    octalOrLiteral(Integer.toString(decimalValue), sb);
-
-                } else if (decimalValue <= caps.size()) {
-                    //  Captures inside a negative lookahead are undefined when referenced from the outside.
-                    if (!caps.get(decimalValue - 1).isContained(negLookaheadGroup, negLookaheadLevel)) {
-                        // Reference to capture in negative lookahead, omit from output buffer.
-                        sb.setLength(sb.length() - 1);
-                    } else {
-                        // Append backreference to output buffer.
-                        sb.append(decimalValue);
-                    }
-                } else {
-                    // Forward references to a capture group are always undefined so we can omit it from the output buffer.
-                    // However, if the target capture does not exist, we need to rewrite the reference as hex escape
-                    // or literal string, so register the reference for later processing.
-                    sb.setLength(sb.length() - 1);
-                    forwardReferences.add(decimalValue);
-                    forwardReferences.add(sb.length());
-                }
-
+                // Forward references to a capture group are always undefined so we can omit it from the output buffer.
+                // However, if the target capture does not exist, we need to rewrite the reference as hex escape
+                // or literal string, so register the reference for later processing.
+                sb.setLength(sb.length() - 1);
+                forwardReferences.push(new IndexedForwardReference(sb.length(), decimalValue));
             }
             return true;
         }
@@ -921,17 +1146,11 @@ public final class RegExpScanner extends Scanner {
 
     /*
      * ClassEscape ::
-     *      DecimalEscape
      *      b
-     *      CharacterEscape
      *      CharacterClassEscape
+     *      CharacterEscape
      */
     private boolean classEscape() {
-
-        if (decimalEscape()) {
-            return true;
-        }
-
         if (ch0 == 'b') {
             sb.setLength(sb.length() - 1);
             sb.append('\b');
@@ -939,8 +1158,7 @@ public final class RegExpScanner extends Scanner {
             return true;
         }
 
-        // Note that contrary to ES 5.1 spec we put identityEscape() last because it acts as a catch-all
-        return characterEscape() || characterClassEscape() || identityEscape();
+        return characterClassEscape() || characterEscape();
     }
 
     /*

@@ -42,10 +42,10 @@ package com.oracle.truffle.js.runtime;
 
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.api.TruffleLanguage;
 import com.oracle.truffle.api.interop.InteropException;
 import com.oracle.truffle.api.interop.Message;
 import com.oracle.truffle.api.interop.TruffleObject;
-import com.oracle.truffle.api.interop.java.JavaInterop;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.object.DynamicObject;
 import com.oracle.truffle.api.source.SourceSection;
@@ -100,6 +100,21 @@ public final class Errors {
     @TruffleBoundary
     public static JSException createTypeErrorDateTimeFormatExpected() {
         return createTypeError("DateTimeFormat object expected.");
+    }
+
+    @TruffleBoundary
+    public static JSException createTypeErrorCanNotMixBigIntWithOtherTypes() {
+        return createTypeError("Cannot mix BigInt and other types, use explicit conversions.");
+    }
+
+    @TruffleBoundary
+    public static JSException createErrorCanNotConvertToBigInt(JSErrorType type, Object x) {
+        return JSException.create(type, String.format("Cannot convert %s to a BigInt.", JSRuntime.safeToString(x)));
+    }
+
+    @TruffleBoundary
+    public static JSException createTypeErrorCanNotConvertBigIntToNumber() {
+        return createTypeError("Cannot convert a BigInt value to a number.");
     }
 
     @TruffleBoundary
@@ -261,6 +276,14 @@ public final class Errors {
         return Errors.createTypeError("Cannot add new property " + keyToString(key) + " to non-extensible " + JSObject.defaultToString(thisObj));
     }
 
+    @TruffleBoundary
+    public static JSException createTypeErrorConstReassignment(Object key, Object thisObj, Node originatingNode) {
+        if (JSObject.isJSObject(thisObj) && JSObject.getJSContext((DynamicObject) thisObj).isOptionV8CompatibilityMode()) {
+            throw Errors.createTypeError("Assignment to constant variable.", originatingNode);
+        }
+        throw Errors.createTypeError("Assignment to constant \"" + key + "\"", originatingNode);
+    }
+
     private static String keyToString(Object key) {
         assert JSRuntime.isPropertyKey(key);
         return key instanceof String ? "\"" + key + "\"" : key.toString();
@@ -289,13 +312,15 @@ public final class Errors {
     }
 
     @TruffleBoundary
-    public static JSException createTypeErrorCannotSetPropertyOf(Object key, Object object) {
+    public static JSException createTypeErrorCannotSetProperty(Object key, Object object, Node originatingNode) {
         assert JSRuntime.isPropertyKey(key);
+        String errorMessage;
         if (JSTruffleOptions.NashornCompatibilityMode) {
-            return Errors.createTypeErrorFormat("Cannot set property \"%s\" of %s", key, JSRuntime.safeToString(object));
+            errorMessage = "Cannot set property \"" + key + "\" of " + JSRuntime.safeToString(object);
         } else {
-            return Errors.createTypeErrorCannotRedefineProperty(key);
+            errorMessage = "Cannot set property '" + key + "' of " + JSRuntime.safeToString(object);
         }
+        return createTypeError(errorMessage, originatingNode);
     }
 
     @TruffleBoundary
@@ -323,7 +348,7 @@ public final class Errors {
                 }
             }
         } else {
-            errorMessage = "Cannot read property \'" + key + "\' of " + JSRuntime.safeToString(object);
+            errorMessage = "Cannot read property '" + key + "' of " + JSRuntime.safeToString(object);
         }
         return createTypeError(errorMessage, originatingNode);
     }
@@ -376,6 +401,11 @@ public final class Errors {
     @TruffleBoundary
     public static JSException createRangeErrorTooManyArguments() {
         return Errors.createRangeError("Maximum call stack size exceeded");
+    }
+
+    @TruffleBoundary
+    public static JSException createRangeErrorBigIntMaxSizeExceeded() {
+        return Errors.createRangeError("Maximum BigInt size exceeded");
     }
 
     @TruffleBoundary
@@ -477,7 +507,8 @@ public final class Errors {
             reason = cause.getClass().getSimpleName();
         }
         String receiverStr = "foreign object";
-        if (JavaInterop.isJavaObject(receiver)) {
+        TruffleLanguage.Env env = AbstractJavaScriptLanguage.getCurrentEnv();
+        if (env.isHostObject(receiver)) {
             try {
                 receiverStr = receiver.toString();
             } catch (Exception e) {

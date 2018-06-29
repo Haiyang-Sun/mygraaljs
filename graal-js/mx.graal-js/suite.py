@@ -8,7 +8,7 @@ suite = {
         {
            "name" : "regex",
            "subdir" : True,
-           "version" : "8ed0b0b53c7e722b0779c29d7e3532fcf27ab3ac",
+           "version" : "3a1b79c3cc8e4b8e7a62064e3e403968e3a7856b",
            "urls" : [
                 {"url" : "https://github.com/graalvm/graal.git", "kind" : "git"},
                 {"url" : "https://curio.ssw.jku.at/nexus/content/repositories/snapshots", "kind" : "binary"},
@@ -17,7 +17,7 @@ suite = {
         {
            "name" : "tools",
            "subdir" : True,
-           "version" : "8ed0b0b53c7e722b0779c29d7e3532fcf27ab3ac",
+           "version" : "3a1b79c3cc8e4b8e7a62064e3e403968e3a7856b",
            "urls" : [
                 {"url" : "https://github.com/graalvm/graal.git", "kind" : "git"},
                 {"url" : "https://curio.ssw.jku.at/nexus/content/repositories/snapshots", "kind" : "binary"},
@@ -125,6 +125,7 @@ suite = {
       ],
       "annotationProcessors" : ["truffle:TRUFFLE_DSL_PROCESSOR"],
       "javaCompliance" : "1.8",
+      "checkstyleVersion" : "8.8",
       "workingSets" : "Truffle,JavaScript",
     },
 
@@ -172,7 +173,7 @@ suite = {
         "truffle:TRUFFLE_API",
       ],
       "javaCompliance" : "1.8",
-      "annotationProcessors" : [],
+      "checkstyleVersion" : "8.8",
       "workingSets" : "Truffle,JavaScript",
     },
 
@@ -245,6 +246,7 @@ suite = {
       "subDir" : "src",
       "sourceDirs" : ["src"],
       "dependencies" : [
+        "regex:TREGEX",
       ],
       "findbugs" : "false",
 #     checkstyle and findbugs turned off to keep the source aligned

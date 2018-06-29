@@ -38,41 +38,32 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-package com.oracle.truffle.js.nodes.access;
+package com.oracle.truffle.js.nodes.cast;
 
-import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Specialization;
-import com.oracle.truffle.api.object.DynamicObject;
-import com.oracle.truffle.api.object.Shape;
-import com.oracle.truffle.api.profiles.ConditionProfile;
-import com.oracle.truffle.js.nodes.JSGuards;
 import com.oracle.truffle.js.nodes.JavaScriptBaseNode;
-import com.oracle.truffle.js.runtime.JSRuntime;
+import com.oracle.truffle.js.runtime.BigInt;
 
 /**
- * Checks whether the argument is a DynamicObject implemented by Graal-js.
+ * Numeric to Number values conversion. i.e. BigInt internal value is converted to a double value
+ * using this node. Currently utilized in Number constructor, as a legal mean to get Numbers back
+ * from BigInts.
  */
-public abstract class IsJSObjectNode extends JavaScriptBaseNode {
+public abstract class JSNumericToNumberNode extends JavaScriptBaseNode {
 
-    protected static final int MAX_SHAPE_COUNT = 1;
+    public abstract Object executeObject(Object value);
 
-    public abstract boolean executeBoolean(Object obj);
-
-    @SuppressWarnings("unused")
-    @Specialization(guards = "cachedShape.check(object)", limit = "MAX_SHAPE_COUNT")
-    protected static boolean doIsObjectShape(DynamicObject object,
-                    @Cached("object.getShape()") Shape cachedShape,
-                    @Cached("isJSType(object)") boolean cachedResult) {
-        return cachedResult;
+    public static JSNumericToNumberNode create() {
+        return JSNumericToNumberNodeGen.create();
     }
 
-    @Specialization(replaces = "doIsObjectShape")
-    protected static boolean doIsObject(Object object,
-                    @Cached("createBinaryProfile()") ConditionProfile resultProfile) {
-        return resultProfile.profile(JSGuards.isJSType(object) && JSRuntime.isObject(object));
+    @Specialization
+    protected static Number doBigInt(BigInt value) {
+        return value.doubleValue();
     }
 
-    public static IsJSObjectNode create() {
-        return IsJSObjectNodeGen.create();
+    @Specialization(guards = "!isBigInt(value)")
+    protected static Object doOther(Object value) {
+        return value;
     }
 }

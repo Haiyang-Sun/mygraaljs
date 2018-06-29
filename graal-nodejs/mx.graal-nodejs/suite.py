@@ -1,6 +1,6 @@
 
 suite = {
-  "mxversion" : "5.115.0",
+  "mxversion" : "5.170.3",
   "name" : "graal-nodejs",
   "versionConflictResolution" : "latest",
 
@@ -59,6 +59,7 @@ suite = {
       ],
       "annotationProcessors" : ["truffle:TRUFFLE_DSL_PROCESSOR"],
       "javaCompliance" : "1.8",
+      "checkstyleVersion" : "8.8",
       "workingSets" : "Truffle,JavaScript,NodeJS",
     },
     "com.oracle.truffle.trufflenode.jniboundaryprofiler" : {

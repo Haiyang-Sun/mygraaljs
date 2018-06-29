@@ -38,27 +38,10 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-package com.oracle.truffle.js.runtime.builtins;
+package com.oracle.truffle.js.runtime;
 
-import com.oracle.truffle.api.object.DynamicObject;
-import com.oracle.truffle.js.runtime.JSContext;
-import com.oracle.truffle.js.runtime.JSRealm;
-import com.oracle.truffle.js.runtime.Symbol;
-import com.oracle.truffle.js.runtime.objects.JSAttributes;
-import com.oracle.truffle.js.runtime.objects.JSObjectUtil;
+import com.oracle.truffle.api.interop.MessageResolution;
 
-public final class JSTestNashorn {
-
-    public static final String CLASS_NAME = "TestNashorn";
-
-    private JSTestNashorn() {
-    }
-
-    public static DynamicObject create(JSRealm realm) {
-        JSContext ctx = realm.getContext();
-        DynamicObject obj = JSUserObject.create(realm);
-        JSObjectUtil.putDataProperty(ctx, obj, Symbol.SYMBOL_TO_STRING_TAG, CLASS_NAME, JSAttributes.configurableNotEnumerableNotWritable());
-        JSObjectUtil.putFunctionsFromContainer(realm, obj, CLASS_NAME);
-        return obj;
-    }
+@MessageResolution(receiverType = BigInt.class)
+public class BigIntMessageResolution {
 }

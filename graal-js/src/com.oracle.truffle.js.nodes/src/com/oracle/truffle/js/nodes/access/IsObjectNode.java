@@ -63,6 +63,11 @@ public abstract class IsObjectNode extends JavaScriptBaseNode {
 
     protected static final int MAX_SHAPE_COUNT = 1;
     protected static final int MAX_JSCLASS_COUNT = 1;
+    private final boolean includeNullUndefined;
+
+    protected IsObjectNode(boolean includeNullUndefined) {
+        this.includeNullUndefined = includeNullUndefined;
+    }
 
     public abstract boolean executeBoolean(Object obj);
 
@@ -75,9 +80,9 @@ public abstract class IsObjectNode extends JavaScriptBaseNode {
     }
 
     @SuppressWarnings("unused")
-    @Specialization(replaces = "isObjectShape", guards = "cachedClass.isInstance(object)", limit = "MAX_JSCLASS_COUNT")
+    @Specialization(guards = {"cachedClass != null", "cachedClass.isInstance(object)"}, replaces = "isObjectShape", limit = "MAX_JSCLASS_COUNT")
     protected static boolean isObjectJSClass(DynamicObject object,
-                    @Cached("getJSClass(object)") JSClass cachedClass,
+                    @Cached("getJSClassChecked(object)") JSClass cachedClass,
                     @Cached("guardIsJSObject(object)") boolean cachedResult) {
         return cachedResult;
     }
@@ -89,12 +94,20 @@ public abstract class IsObjectNode extends JavaScriptBaseNode {
     }
 
     public static IsObjectNode create() {
-        return IsObjectNodeGen.create();
+        return IsObjectNodeGen.create(false);
+    }
+
+    public static IsObjectNode createIncludeNullUndefined() {
+        return IsObjectNodeGen.create(true);
     }
 
     // name-clash with JSObject.isJSObject. Different behavior around null/undefined.
     protected boolean guardIsJSObject(DynamicObject obj) {
-        return JSGuards.isJSObject(obj);
+        if (includeNullUndefined) {
+            return JSObject.isJSObject(obj);
+        } else {
+            return JSGuards.isJSObject(obj);
+        }
     }
 
     /**

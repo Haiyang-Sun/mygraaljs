@@ -76,16 +76,29 @@ describe('Other', function () {
             Object.create(script).runInThisContext();
         }, TypeError, "Illegal invocation");
     });
-    it('should throw the right exception from vm.runInNewContext() (GR-9592)', function () {
+    it('should throw the right error from vm.runInNewContext() (GR-9592)', function () {
         Error.prepareStackTrace = function () {
             fs.existsSync("."); // a call that invokes a native method needed here
         };
+        var caught = null;
         try {
-            assert.throws(function () {
-                vm.runInNewContext("'");
-            }, SyntaxError);
+            vm.runInNewContext("'");
+        } catch (e) {
+            caught = e;
         } finally {
             Error.prepareStackTrace = null;
         }
+        assert.notStrictEqual(caught, null, "Error not thrown");
+        assert.strictEqual(caught.name, "SyntaxError");
+    });
+    it('Debug.setBreakPoint() should accept various number of arguments', function() {
+        var Debug = vm.runInDebugContext('Debug');
+        // we do not check the functionality of Debug.setBreakPoint() here
+        // we check that these calls do not crash/throw an Error only
+        Debug.setBreakPoint(function() {});
+        Debug.setBreakPoint(function() {}, 0);
+        Debug.setBreakPoint(function() {}, 0, 0);
+        Debug.setBreakPoint(function() {}, 0, 0, undefined);
+        Debug.setBreakPoint(function() {}, 0, 0, undefined, true);
     });
 });

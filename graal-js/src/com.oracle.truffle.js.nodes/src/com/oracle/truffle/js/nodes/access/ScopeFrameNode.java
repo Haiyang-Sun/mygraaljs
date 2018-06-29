@@ -40,11 +40,11 @@
  */
 package com.oracle.truffle.js.nodes.access;
 
-import com.oracle.truffle.api.CompilerAsserts;
+import java.util.List;
+
+import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
 import com.oracle.truffle.api.frame.Frame;
-import com.oracle.truffle.api.frame.FrameDescriptor;
 import com.oracle.truffle.api.frame.FrameSlot;
-import com.oracle.truffle.api.frame.FrameSlotKind;
 import com.oracle.truffle.api.frame.FrameUtil;
 import com.oracle.truffle.api.frame.MaterializedFrame;
 import com.oracle.truffle.api.nodes.ExplodeLoop;
@@ -53,22 +53,16 @@ import com.oracle.truffle.api.nodes.NodeInfo;
 import com.oracle.truffle.api.object.DynamicObject;
 import com.oracle.truffle.js.nodes.JavaScriptBaseNode;
 import com.oracle.truffle.js.runtime.JSArguments;
-import com.oracle.truffle.js.runtime.JSContext;
 import com.oracle.truffle.js.runtime.JSFrameUtil;
 import com.oracle.truffle.js.runtime.objects.JSObject;
 import com.oracle.truffle.js.runtime.objects.Undefined;
 
 public abstract class ScopeFrameNode extends JavaScriptBaseNode {
-    public static final FrameDescriptor SCOPE_FRAME_DESCRIPTOR;
-    public static final FrameSlot PARENT_SCOPE_SLOT;
     public static final Object PARENT_SCOPE_IDENTIFIER = "<parent>";
-    static {
-        SCOPE_FRAME_DESCRIPTOR = new FrameDescriptor(Undefined.instance);
-        PARENT_SCOPE_SLOT = SCOPE_FRAME_DESCRIPTOR.addFrameSlot(PARENT_SCOPE_IDENTIFIER, FrameSlotKind.Object);
-    }
+    public static final FrameSlot[] EMPTY_FRAME_SLOT_ARRAY = {};
 
-    public static ScopeFrameNode create(int frameLevel, int scopeLevel) {
-        return create(frameLevel, scopeLevel, PARENT_SCOPE_SLOT);
+    public static ScopeFrameNode create(int frameLevel) {
+        return create(frameLevel, 0, EMPTY_FRAME_SLOT_ARRAY);
     }
 
     public abstract int getFrameLevel();
@@ -84,27 +78,25 @@ public abstract class ScopeFrameNode extends JavaScriptBaseNode {
     }
 
     public static ScopeFrameNode create(int frameLevel, int scopeLevel, FrameSlot parentSlot) {
+    public static ScopeFrameNode create(int frameLevel, int scopeLevel, FrameSlot[] parentSlots) {
+        assert scopeLevel == parentSlots.length;
         if (frameLevel == 0) {
             if (scopeLevel == 0) {
                 return new CurrentFrameNode();
             }
-            return new EnclosingScopeFrameNode(scopeLevel, parentSlot);
+            return new EnclosingScopeFrameNode(scopeLevel, parentSlots);
         } else if (scopeLevel == 0) {
             if (frameLevel == 1) {
                 return new EnclosingFunctionFrameNodeLevel1();
             }
             return new EnclosingFunctionFrameNode(frameLevel);
         }
-        return new EnclosingFunctionScopeFrameNode(frameLevel, scopeLevel, parentSlot);
-    }
-
-    public static ScopeFrameNode createGlobalScope(JSContext context) {
-        return new GlobalScopeFrameNode(context);
+        return new EnclosingFunctionScopeFrameNode(frameLevel, scopeLevel, parentSlots);
     }
 
     public static boolean isBlockScopeFrame(Frame frame) {
-        CompilerAsserts.neverPartOfCompilation("do not check FrameDescriptor in compiled code");
-        return frame.getFrameDescriptor().getSlots().contains(PARENT_SCOPE_SLOT);
+        List<? extends FrameSlot> slots = frame.getFrameDescriptor().getSlots();
+        return !slots.isEmpty() && slots.get(0).getIdentifier() == PARENT_SCOPE_IDENTIFIER;
     }
 
     public abstract Frame executeFrame(Frame frame);
@@ -134,12 +126,12 @@ public abstract class ScopeFrameNode extends JavaScriptBaseNode {
 
     private static final class EnclosingScopeFrameNode extends ScopeFrameNode {
         private final int scopeLevel;
-        private final FrameSlot parentSlot;
+        @CompilationFinal(dimensions = 1) private final FrameSlot[] parentSlots;
 
-        EnclosingScopeFrameNode(int scopeLevel, FrameSlot parentSlot) {
+        EnclosingScopeFrameNode(int scopeLevel, FrameSlot[] parentSlots) {
             assert scopeLevel >= 1;
             this.scopeLevel = scopeLevel;
-            this.parentSlot = parentSlot;
+            this.parentSlots = parentSlots;
         }
 
         @Override
@@ -147,7 +139,7 @@ public abstract class ScopeFrameNode extends JavaScriptBaseNode {
         public Frame executeFrame(Frame frame) {
             Frame retFrame = frame;
             for (int i = 0; i < scopeLevel; i++) {
-                retFrame = JSFrameUtil.castMaterializedFrame(FrameUtil.getObjectSafe(retFrame, parentSlot));
+                retFrame = JSFrameUtil.castMaterializedFrame(FrameUtil.getObjectSafe(retFrame, parentSlots[i]));
             }
             return retFrame;
         }
@@ -166,12 +158,12 @@ public abstract class ScopeFrameNode extends JavaScriptBaseNode {
     private static final class EnclosingFunctionScopeFrameNode extends ScopeFrameNode {
         private final int frameLevel;
         private final int scopeLevel;
-        private final FrameSlot parentSlot;
+        @CompilationFinal(dimensions = 1) private final FrameSlot[] parentSlots;
 
-        EnclosingFunctionScopeFrameNode(int frameLevel, int scopeLevel, FrameSlot parentSlot) {
+        EnclosingFunctionScopeFrameNode(int frameLevel, int scopeLevel, FrameSlot[] parentSlots) {
             this.frameLevel = frameLevel;
             this.scopeLevel = scopeLevel;
-            this.parentSlot = parentSlot;
+            this.parentSlots = parentSlots;
         }
 
         @Override
@@ -182,7 +174,7 @@ public abstract class ScopeFrameNode extends JavaScriptBaseNode {
                 retFrame = JSFrameUtil.castMaterializedFrame(JSArguments.getEnclosingFrame(retFrame.getArguments()));
             }
             for (int i = 0; i < scopeLevel; i++) {
-                retFrame = JSFrameUtil.castMaterializedFrame(FrameUtil.getObjectSafe(retFrame, parentSlot));
+                retFrame = JSFrameUtil.castMaterializedFrame(FrameUtil.getObjectSafe(retFrame, parentSlots[i]));
             }
             return retFrame;
         }
@@ -241,29 +233,6 @@ public abstract class ScopeFrameNode extends JavaScriptBaseNode {
         @Override
         public int getScopeLevel() {
             return 0;
-        }
-    }
-
-    private static final class GlobalScopeFrameNode extends ScopeFrameNode {
-        private final JSContext context;
-
-        GlobalScopeFrameNode(JSContext context) {
-            this.context = context;
-        }
-
-        @Override
-        public Frame executeFrame(Frame frame) {
-            return context.getRealm().getGlobalScope();
-        }
-
-        @Override
-        public int getFrameLevel() {
-            return -1;
-        }
-
-        @Override
-        public int getScopeLevel() {
-            return -1;
         }
     }
 }

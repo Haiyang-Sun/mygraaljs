@@ -112,7 +112,7 @@ public abstract class PropertySetNode extends PropertyCacheNode<PropertySetNode>
         return createImpl(key, isGlobal, context, isStrict, setOwnProperty, JSAttributes.getDefault());
     }
 
-    private static PropertySetNode createImpl(Object key, boolean isGlobal, JSContext context, boolean isStrict, boolean setOwnProperty, int attributeFlags) {
+    public static PropertySetNode createImpl(Object key, boolean isGlobal, JSContext context, boolean isStrict, boolean setOwnProperty, int attributeFlags) {
         if (JSTruffleOptions.PropertyCacheLimit > 0) {
             return new UninitializedPropertySetNode(key, isGlobal, context, isStrict, setOwnProperty, attributeFlags);
         } else {
@@ -837,7 +837,7 @@ public abstract class PropertySetNode extends PropertyCacheNode<PropertySetNode>
 
         @TruffleBoundary
         private void setValueUncheckedIntl(Object thisObj) {
-            throw Errors.createTypeErrorCannotSetPropertyOf(getKey(), thisObj);
+            throw Errors.createTypeErrorCannotSetProperty(getKey(), thisObj, this);
         }
     }
 
@@ -992,7 +992,7 @@ public abstract class PropertySetNode extends PropertyCacheNode<PropertySetNode>
             } else if (isForeignObject.profile(JSGuards.isForeignObject(thisObj))) {
                 if (foreignSetNode == null) {
                     CompilerDirectives.transferToInterpreterAndInvalidate();
-                    foreignSetNode = insert(new ForeignPropertySetNode(key));
+                    foreignSetNode = insert(new ForeignPropertySetNode(key, context));
                 }
                 foreignSetNode.setValue(thisObj, value, receiver);
             } else {
@@ -1017,9 +1017,10 @@ public abstract class PropertySetNode extends PropertyCacheNode<PropertySetNode>
         @Child private Node foreignSet;
         @Child private ExportValueNode export;
 
-        public ForeignPropertySetNode(Object key) {
+        public ForeignPropertySetNode(Object key, JSContext context) {
             super(key, new ForeignLanguageCheckNode());
             this.foreignSet = Message.WRITE.createNode();
+            this.export = ExportValueNode.create(context);
         }
 
         @Override
@@ -1043,10 +1044,6 @@ public abstract class PropertySetNode extends PropertyCacheNode<PropertySetNode>
         @Override
         public void setValueUnchecked(Object thisObj, Object value, Object receiver, boolean condition) {
             try {
-                if (export == null) {
-                    CompilerDirectives.transferToInterpreterAndInvalidate();
-                    export = ExportValueNode.create();
-                }
                 Object boundValue = export.executeWithTarget(value, Undefined.instance);
                 ForeignAccess.sendWrite(foreignSet, (TruffleObject) thisObj, key, boundValue);
             } catch (UnknownIdentifierException | UnsupportedTypeException | UnsupportedMessageException e) {
@@ -1175,8 +1172,8 @@ public abstract class PropertySetNode extends PropertyCacheNode<PropertySetNode>
         }
     }
 
-    private LinkedPropertySetNode createCachedDataPropertyNodeJSObject(DynamicObject thisObj, int depth, JSContext context, Object value, AbstractShapeCheckNode shapeCheck,
-                    Property dataProperty) {
+    private LinkedPropertySetNode createCachedDataPropertyNodeJSObject(DynamicObject thisObj, int depth, JSContext context, Object value, AbstractShapeCheckNode shapeCheck, Property dataProperty) {
+        assert !JSProperty.isConst(dataProperty) || (depth == 0 && isGlobal() && dataProperty.getLocation().isDeclared()) : "const assignment";
         if (!JSProperty.isWritable(dataProperty)) {
             return new ReadOnlyPropertySetNode(key, shapeCheck, isStrict());
         } else if (depth > 0) {
@@ -1251,7 +1248,7 @@ public abstract class PropertySetNode extends PropertyCacheNode<PropertySetNode>
 
     private static LinkedPropertySetNode createResolvedDefinePropertyNode(Object key, ReceiverCheckNode receiverCheck, Shape newShape, JSContext context, int attributeFlags) {
         Property prop = newShape.getProperty(key);
-        assert (prop.getFlags() & JSAttributes.ATTRIBUTES_MASK) == attributeFlags;
+        assert (prop.getFlags() & (JSAttributes.ATTRIBUTES_MASK | JSProperty.CONST)) == attributeFlags;
 
         if (prop.getLocation() instanceof IntLocation) {
             return new DefineIntPropertyNode(key, receiverCheck, newShape, context, prop);
@@ -1382,7 +1379,7 @@ public abstract class PropertySetNode extends PropertyCacheNode<PropertySetNode>
 
     @Override
     protected PropertySetNode createTruffleObjectPropertyNode(TruffleObject thisObject, JSContext context) {
-        return new ForeignPropertySetNode(key);
+        return new ForeignPropertySetNode(key, context);
     }
 
     protected int getAttributeFlags() {
