@@ -70,7 +70,7 @@ public abstract class AbstractBlockNode extends StatementNode implements Sequenc
     public final void executeVoid(VirtualFrame frame) {
         JavaScriptNode[] stmts = statements;
         for (int i = 0; i < stmts.length; ++i) {
-            stmts[i].executeVoid(frame);
+            stmts[i].execute(frame);
         }
     }
 
