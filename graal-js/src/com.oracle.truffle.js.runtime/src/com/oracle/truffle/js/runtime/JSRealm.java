@@ -238,6 +238,7 @@ public class JSRealm implements ShapeContext {
     private final DynamicObject setIteratorPrototype;
     private final DynamicObject mapIteratorPrototype;
     private final DynamicObject stringIteratorPrototype;
+    private final DynamicObject regExpStringIteratorPrototype;
 
     @CompilationFinal(dimensions = 1) private final JSConstructor[] simdTypeConstructors;
     @CompilationFinal(dimensions = 1) private final DynamicObjectFactory[] simdTypeFactories;
@@ -452,10 +453,12 @@ public class JSRealm implements ShapeContext {
             this.pluralRulesFactory = null;
         }
 
-        this.jsAdapterConstructor = JSTruffleOptions.NashornExtensions ? JSAdapter.createConstructor(this) : null;
-        this.jsAdapterFactory = JSTruffleOptions.NashornExtensions ? JSAdapter.makeInitialShape(context, jsAdapterConstructor.getPrototype()).createFactory() : null;
-        this.javaImporterConstructor = JSTruffleOptions.NashornJavaInterop ? JavaImporter.createConstructor(this) : null;
-        this.javaImportFactory = JSTruffleOptions.NashornJavaInterop ? JavaImporter.makeInitialShape(context, javaImporterConstructor.getPrototype()).createFactory() : null;
+        boolean nashornCompat = context.isOptionNashornCompatibilityMode() || JSTruffleOptions.NashornCompatibilityMode;
+        boolean nashornJavaInterop = isJavaInteropAvailable() && (context.isOptionNashornCompatibilityMode() || JSTruffleOptions.NashornJavaInterop);
+        this.jsAdapterConstructor = nashornCompat ? JSAdapter.createConstructor(this) : null;
+        this.jsAdapterFactory = nashornCompat ? JSAdapter.makeInitialShape(context, jsAdapterConstructor.getPrototype()).createFactory() : null;
+        this.javaImporterConstructor = nashornJavaInterop ? JavaImporter.createConstructor(this) : null;
+        this.javaImportFactory = nashornJavaInterop ? JavaImporter.makeInitialShape(context, javaImporterConstructor.getPrototype()).createFactory() : null;
         this.initialJavaPackageFactory = isJavaInteropAvailable() ? JavaPackage.createInitialShape(this).createFactory() : null;
 
         this.iteratorPrototype = es6 ? createIteratorPrototype() : null;
@@ -463,6 +466,7 @@ public class JSRealm implements ShapeContext {
         this.setIteratorPrototype = es6 ? createSetIteratorPrototype() : null;
         this.mapIteratorPrototype = es6 ? createMapIteratorPrototype() : null;
         this.stringIteratorPrototype = es6 ? createStringIteratorPrototype() : null;
+        this.regExpStringIteratorPrototype = JSTruffleOptions.MaxECMAScriptVersion >= JSTruffleOptions.ECMAScript2019 ? createRegExpStringIteratorPrototype() : null;
 
         this.generatorFunctionConstructor = es6 ? JSFunction.createGeneratorFunctionConstructor(this) : null;
         this.initialGeneratorFactory = es6 ? JSFunction.makeInitialGeneratorFunctionConstructorShape(this, generatorFunctionConstructor.getPrototype(), false).createFactory() : null;
@@ -790,10 +794,6 @@ public class JSRealm implements ShapeContext {
         return realmBuiltinObject;
     }
 
-    public final JSConstructor getJSAdapterConstructor() {
-        return jsAdapterConstructor;
-    }
-
     public final JSConstructor getProxyConstructor() {
         return proxyConstructor;
     }
@@ -904,7 +904,7 @@ public class JSRealm implements ShapeContext {
         }), 0, "set " + JSObject.PROTO));
 
         // ES6 draft annex, B.2.2 Additional Properties of the Object.prototype Object
-        JSObjectUtil.putConstantAccessorProperty(context, realm.getObjectPrototype(), JSObject.PROTO, getProto, setProto, JSAttributes.configurableNotEnumerable());
+        JSObjectUtil.putConstantAccessorProperty(context, realm.getObjectPrototype(), JSObject.PROTO, getProto, setProto);
     }
 
     public final DynamicObject getThrowerFunction() {
@@ -942,6 +942,10 @@ public class JSRealm implements ShapeContext {
 
     public DynamicObject getStringIteratorPrototype() {
         return stringIteratorPrototype;
+    }
+
+    public DynamicObject getRegExpStringIteratorPrototype() {
+        return regExpStringIteratorPrototype;
     }
 
     /**
@@ -1008,9 +1012,7 @@ public class JSRealm implements ShapeContext {
         JSObjectUtil.putDataProperty(context, global, Undefined.NAME, Undefined.instance);
 
         JSObjectUtil.putFunctionsFromContainer(this, global, JSGlobalObject.CLASS_NAME);
-        if (context.isOptionNashornCompatibilityMode()) {
-            JSObjectUtil.putFunctionsFromContainer(this, global, JSGlobalObject.CLASS_NAME_NASHORN_EXTENSIONS);
-        }
+
         this.evalFunctionObject = JSObject.get(global, JSGlobalObject.EVAL_NAME);
         this.applyFunctionObject = JSObject.get(getFunctionPrototype(), "apply");
         this.callFunctionObject = JSObject.get(getFunctionPrototype(), "call");
@@ -1033,8 +1035,8 @@ public class JSRealm implements ShapeContext {
             putGlobalProperty(global, JSSIMD.SIMD_OBJECT_NAME, simdObject);
         }
 
-        if (JSTruffleOptions.NashornExtensions) {
-            putGlobalProperty(global, JSAdapter.CLASS_NAME, getJSAdapterConstructor().getFunctionObject());
+        if (context.isOptionNashornCompatibilityMode()) {
+            initGlobalNashornExtensions(global);
         }
         if (JSTruffleOptions.TruffleInterop) {
             setupPolyglot(global);
@@ -1088,6 +1090,18 @@ public class JSRealm implements ShapeContext {
         arrayProtoValuesIterator = (DynamicObject) getArrayConstructor().getPrototype().get(Symbol.SYMBOL_ITERATOR, Undefined.instance);
     }
 
+    private void initGlobalNashornExtensions(DynamicObject global) {
+        assert getContext().isOptionNashornCompatibilityMode();
+        putGlobalProperty(global, JSAdapter.CLASS_NAME, jsAdapterConstructor.getFunctionObject());
+        DynamicObject parseToJSON = lookupFunction(JSGlobalObject.CLASS_NAME_NASHORN_EXTENSIONS, "parseToJSON");
+        JSObjectUtil.putOrSetDataProperty(getContext(), global, "parseToJSON", parseToJSON, JSAttributes.getDefaultNotEnumerable());
+    }
+
+    private void initGlobalScriptingExtensions(DynamicObject global) {
+        DynamicObject exec = lookupFunction(JSGlobalObject.CLASS_NAME_NASHORN_EXTENSIONS, "exec");
+        JSObjectUtil.putOrSetDataProperty(getContext(), global, "$EXEC", exec, JSAttributes.getDefaultNotEnumerable());
+    }
+
     private void putGraalObject(DynamicObject global) {
         DynamicObject graalObject = JSUserObject.create(context);
         JSObjectUtil.putDataProperty(context, graalObject, "language", AbstractJavaScriptLanguage.NAME);
@@ -1130,6 +1144,7 @@ public class JSRealm implements ShapeContext {
         putSymbolProperty(symbolFunction, "iterator", Symbol.SYMBOL_ITERATOR);
         putSymbolProperty(symbolFunction, "asyncIterator", Symbol.SYMBOL_ASYNC_ITERATOR);
         putSymbolProperty(symbolFunction, "match", Symbol.SYMBOL_MATCH);
+        putSymbolProperty(symbolFunction, "matchAll", Symbol.SYMBOL_MATCH_ALL);
         putSymbolProperty(symbolFunction, "replace", Symbol.SYMBOL_REPLACE);
         putSymbolProperty(symbolFunction, "search", Symbol.SYMBOL_SEARCH);
         putSymbolProperty(symbolFunction, "species", Symbol.SYMBOL_SPECIES);
@@ -1154,16 +1169,20 @@ public class JSRealm implements ShapeContext {
         DynamicObject java = JSJava.create(this);
         JSObjectUtil.putFunctionsFromContainer(this, java, JSJava.CLASS_NAME);
         putGlobalProperty(global, JSJava.CLASS_NAME, java);
+        if (context.isOptionNashornCompatibilityMode() && !JSTruffleOptions.NashornJavaInterop) {
+            JSObjectUtil.putFunctionsFromContainer(this, java, JSJava.CLASS_NAME_NASHORN_COMPAT);
+        }
 
         if (getEnv() != null && getEnv().isHostLookupAllowed()) {
             putGlobalProperty(global, "Packages", JavaPackage.create(this, ""));
-            if (JSTruffleOptions.NashornJavaInterop) {
+            if (context.isOptionNashornCompatibilityMode() || JSTruffleOptions.NashornJavaInterop) {
                 putGlobalProperty(global, "java", JavaPackage.create(this, "java"));
                 putGlobalProperty(global, "javafx", JavaPackage.create(this, "javafx"));
                 putGlobalProperty(global, "javax", JavaPackage.create(this, "javax"));
                 putGlobalProperty(global, "com", JavaPackage.create(this, "com"));
                 putGlobalProperty(global, "org", JavaPackage.create(this, "org"));
                 putGlobalProperty(global, "edu", JavaPackage.create(this, "edu"));
+
                 putGlobalProperty(global, JavaImporter.CLASS_NAME, getJavaImporterConstructor().getFunctionObject());
             }
         }
@@ -1235,6 +1254,16 @@ public class JSRealm implements ShapeContext {
         DynamicObject prototype = JSObject.create(context, this.iteratorPrototype, JSUserObject.INSTANCE);
         JSObjectUtil.putFunctionsFromContainer(this, prototype, JSString.ITERATOR_PROTOTYPE_NAME);
         JSObjectUtil.putDataProperty(context, prototype, Symbol.SYMBOL_TO_STRING_TAG, JSString.ITERATOR_CLASS_NAME, JSAttributes.configurableNotEnumerableNotWritable());
+        return prototype;
+    }
+
+    /**
+     * Creates the %RegExpStringIteratorPrototype% object.
+     */
+    private DynamicObject createRegExpStringIteratorPrototype() {
+        DynamicObject prototype = JSObject.create(context, this.iteratorPrototype, JSUserObject.INSTANCE);
+        JSObjectUtil.putFunctionsFromContainer(this, prototype, JSString.REGEXP_ITERATOR_PROTOTYPE_NAME);
+        JSObjectUtil.putDataProperty(context, prototype, Symbol.SYMBOL_TO_STRING_TAG, JSString.REGEXP_ITERATOR_CLASS_NAME, JSAttributes.configurableNotEnumerableNotWritable());
         return prototype;
     }
 
@@ -1411,16 +1440,14 @@ public class JSRealm implements ShapeContext {
     /**
      * Adds several objects to the global object, in case scripting mode is enabled (for Nashorn
      * compatibility). This includes an {@code $OPTIONS} property that exposes several options to
-     * the script, an {@code $ARG} array with arguments to the script, and an {@code $ENV} object
-     * with environment variables.
+     * the script, an {@code $ARG} array with arguments to the script, an {@code $ENV} object with
+     * environment variables, and an {@code $EXEC} function to execute external code.
      */
     public void addScriptingObjects() {
         CompilerAsserts.neverPartOfCompilation();
-        if (!JSTruffleOptions.NashornExtensions) {
-            return;
-        }
         DynamicObject globalObj = getGlobalObject();
 
+        // $OPTIONS
         String timezone = context.getLocalTimeZoneId().getId();
         DynamicObject timezoneObj = JSUserObject.create(context);
         JSObjectUtil.putDataProperty(context, timezoneObj, "ID", timezone, JSAttributes.configurableEnumerableWritable());
@@ -1432,15 +1459,25 @@ public class JSRealm implements ShapeContext {
 
         JSObjectUtil.putOrSetDataProperty(context, globalObj, "$OPTIONS", optionsObj, JSAttributes.configurableNotEnumerableWritable());
 
+        // $ARG
         DynamicObject argObj = JSArray.createConstant(context, getEnv().getApplicationArguments());
         JSObjectUtil.putOrSetDataProperty(context, globalObj, "$ARG", argObj, JSAttributes.configurableNotEnumerableWritable());
 
+        // $ENV
         DynamicObject envObj = JSUserObject.create(context);
         Map<String, String> sysenv = System.getenv();
         for (Map.Entry<String, String> entry : sysenv.entrySet()) {
             JSObjectUtil.putDataProperty(context, envObj, entry.getKey(), entry.getValue(), JSAttributes.configurableEnumerableWritable());
         }
         JSObjectUtil.putOrSetDataProperty(context, globalObj, "$ENV", envObj, JSAttributes.configurableNotEnumerableWritable());
+
+        // $EXEC
+        initGlobalScriptingExtensions(globalObj);
+
+        // $OUT, $ERR, $EXIT
+        JSObjectUtil.putOrSetDataProperty(context, globalObj, "$EXIT", Undefined.instance, JSAttributes.getDefaultNotEnumerable());
+        JSObjectUtil.putOrSetDataProperty(context, globalObj, "$OUT", Undefined.instance, JSAttributes.getDefaultNotEnumerable());
+        JSObjectUtil.putOrSetDataProperty(context, globalObj, "$ERR", Undefined.instance, JSAttributes.getDefaultNotEnumerable());
     }
 
     public void setRealmBuiltinObject(DynamicObject realmBuiltinObject) {

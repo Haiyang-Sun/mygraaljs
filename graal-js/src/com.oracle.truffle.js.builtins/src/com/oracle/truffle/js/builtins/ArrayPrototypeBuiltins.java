@@ -342,12 +342,16 @@ public final class ArrayPrototypeBuiltins extends JSBuiltinsContainer.SwitchEnum
             }
         }
 
-        protected final DynamicObject checkCallbackIsFunction(Object callback) {
+        protected final boolean isCallable(Object callback) {
             if (isCallableNode == null) {
                 CompilerDirectives.transferToInterpreterAndInvalidate();
                 isCallableNode = IsCallableNode.create();
             }
-            if (!isCallableNode.executeBoolean(callback)) {
+            return isCallableNode.executeBoolean(callback);
+        }
+
+        protected final DynamicObject checkCallbackIsFunction(Object callback) {
+            if (!isCallable(callback)) {
                 errorBranch.enter();
                 throw Errors.createTypeErrorNotAFunction(callback, this);
             }
@@ -1137,7 +1141,7 @@ public final class ArrayPrototypeBuiltins extends JSBuiltinsContainer.SwitchEnum
             return joinPropertyNode.executeWithTarget(target);
         }
 
-        private Object callJoin(Object target, DynamicObject function) {
+        private Object callJoin(Object target, Object function) {
             if (callNode == null) {
                 CompilerDirectives.transferToInterpreterAndInvalidate();
                 callNode = insert(JSFunctionCallNode.createCall());
@@ -1152,11 +1156,13 @@ public final class ArrayPrototypeBuiltins extends JSBuiltinsContainer.SwitchEnum
                 return JSObject.defaultToString((DynamicObject) thisObj);
             }
             TruffleObject arrayObj = toObject(thisObj);
-            Object join = getJoinProperty(arrayObj);
-            if (JSFunction.isJSFunction(join)) {
-                return callJoin(arrayObj, (DynamicObject) join);
-            } else if (JSObject.isJSObject(arrayObj)) {
-                return JSObject.defaultToString((DynamicObject) arrayObj);
+            if (JSObject.isJSObject(arrayObj)) {
+                Object join = getJoinProperty(arrayObj);
+                if (isCallable(join)) {
+                    return callJoin(arrayObj, join);
+                } else {
+                    return JSObject.defaultToString((DynamicObject) arrayObj);
+                }
             } else {
                 return "[object Foreign]";
             }
@@ -1557,13 +1563,14 @@ public final class ArrayPrototypeBuiltins extends JSBuiltinsContainer.SwitchEnum
         }
 
         @Specialization
-        protected String toLocaleString(Object thisObj,
+        protected String toLocaleString(VirtualFrame frame, Object thisObj,
                         @Cached("create()") JSToStringNode toStringNode) {
             TruffleObject arrayObj = toObject(thisObj);
             long len = getLength(arrayObj);
             if (len == 0) {
                 return "";
             }
+            Object[] userArguments = JSArguments.extractUserArguments(frame.getArguments());
             long k = 0;
             DelimitedStringBuilder r = new DelimitedStringBuilder();
             while (k < len) {
@@ -1572,7 +1579,7 @@ public final class ArrayPrototypeBuiltins extends JSBuiltinsContainer.SwitchEnum
                 }
                 Object nextElement = read(arrayObj, k);
                 if (nextElement != Null.instance && nextElement != Undefined.instance) {
-                    Object result = callToLocaleString(nextElement);
+                    Object result = callToLocaleString(nextElement, userArguments);
                     String executeString = toStringNode.executeString(result);
                     r.append(executeString);
                 }
@@ -1581,7 +1588,7 @@ public final class ArrayPrototypeBuiltins extends JSBuiltinsContainer.SwitchEnum
             return r.toString();
         }
 
-        private Object callToLocaleString(Object nextElement) {
+        private Object callToLocaleString(Object nextElement, Object[] userArguments) {
             if (getToLocaleString == null) {
                 CompilerDirectives.transferToInterpreterAndInvalidate();
                 getToLocaleString = insert(PropertyGetNode.create("toLocaleString", false, getContext()));
@@ -1590,7 +1597,7 @@ public final class ArrayPrototypeBuiltins extends JSBuiltinsContainer.SwitchEnum
 
             Object toLocaleString = getToLocaleString.getValue(nextElement);
             JSFunction.checkIsFunction(toLocaleString);
-            return callToLocaleString.executeCall(JSArguments.createZeroArg(nextElement, toLocaleString));
+            return callToLocaleString.executeCall(JSArguments.create(nextElement, toLocaleString, userArguments));
         }
     }
 

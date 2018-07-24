@@ -257,16 +257,11 @@ public final class ConstructorBuiltins extends JSBuiltinsContainer.SwitchEnum<Co
         Symbol(0),
 
         // non-standard (Nashorn) extensions
-        JSAdapter(1) {
-            @Override
-            public boolean isEnabled() {
-                return JSTruffleOptions.NashornExtensions;
-            }
-        },
+        JSAdapter(1),
         JavaImporter(1) {
             @Override
             public boolean isEnabled() {
-                return JSTruffleOptions.NashornJavaInterop;
+                return !JSTruffleOptions.SubstrateVM;
             }
         },
         JavaInteropWorker(1) {
@@ -499,18 +494,14 @@ public final class ConstructorBuiltins extends JSBuiltinsContainer.SwitchEnum<Co
             default:
                 if (!JSTruffleOptions.SubstrateVM) {
                     switch (builtinEnum) {
+                        case JavaImporter:
+                            return ConstructJavaImporterNodeGen.create(context, builtin, args().varArgs().createArgumentNodes(context));
                         case JavaInteropWorker:
                             if (construct) {
                                 return ConstructJavaInteropWorkerNodeGen.create(context, builtin, args().fixedArgs(0).createArgumentNodes(context));
                             } else {
                                 return createCallRequiresNew(context, builtin);
                             }
-                    }
-                }
-                if (JSTruffleOptions.NashornJavaInterop) {
-                    switch (builtinEnum) {
-                        case JavaImporter:
-                            return ConstructJavaImporterNodeGen.create(context, builtin, args().varArgs().createArgumentNodes(context));
                     }
                 }
         }
@@ -1548,7 +1539,12 @@ public final class ConstructorBuiltins extends JSBuiltinsContainer.SwitchEnum<Co
                 viewByteLength = bufferByteLength - offset;
             }
             assert offset >= 0 && offset <= Integer.MAX_VALUE && viewByteLength >= 0 && viewByteLength <= Integer.MAX_VALUE;
-            return swapPrototype(JSDataView.createDataView(getContext(), arrayBuffer, (int) offset, (int) viewByteLength), newTarget);
+            DynamicObject result = swapPrototype(JSDataView.createDataView(getContext(), arrayBuffer, (int) offset, (int) viewByteLength), newTarget);
+            if (!getContext().getTypedArrayNotDetachedAssumption().isValid() && JSArrayBuffer.isDetachedBuffer(arrayBuffer)) {
+                errorBranch.enter();
+                throw Errors.createTypeErrorDetachedBuffer();
+            }
+            return result;
         }
 
         @Override
@@ -1908,7 +1904,7 @@ public final class ConstructorBuiltins extends JSBuiltinsContainer.SwitchEnum<Co
 
         @Specialization
         protected Symbol callSymbol(Object value) {
-            return Symbol.create(toStringNode.executeString(value));
+            return Symbol.create(value == Undefined.instance ? null : toStringNode.executeString(value));
         }
     }
 

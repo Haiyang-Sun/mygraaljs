@@ -136,9 +136,10 @@ public final class JSContextOptions {
     private static final String PRECISE_TIME_HELP = helpWithDefault("High-resolution timestamps via performance.now()", PRECISE_TIME);
     @CompilationFinal private boolean preciseTime;
 
-    public static final String CODE_SHARING_NAME = JS_OPTION_PREFIX + "code-sharing";
-    public static final OptionKey<String> CODE_SHARING = new OptionKey<>("pool");
-    private static final String CODE_SHARING_HELP = helpWithDefault("Code sharing between Contexts of an Engine: 'pool' enables code reuse via a pool of closed contexts.", CODE_SHARING);
+    public static final String AGENT_CAN_BLOCK_NAME = JS_OPTION_PREFIX + "agent-can-block";
+    public static final OptionKey<Boolean> AGENT_CAN_BLOCK = new OptionKey<>(true);
+    private static final String AGENT_CAN_BLOCK_HELP = helpWithDefault("Determines whether agents can block or not.", AGENT_CAN_BLOCK);
+    @CompilationFinal private boolean agentCanBlock;
 
     private static final OptionKey<?>[] PREINIT_CONTEXT_OPTION_KEYS = {
                     ECMASCRIPT_VERSION,
@@ -195,6 +196,7 @@ public final class JSContextOptions {
         this.parseOnly = readBooleanOption(PARSE_ONLY, PARSE_ONLY_NAME);
         this.debug = readBooleanOption(DEBUG_BUILTIN, DEBUG_BUILTIN_NAME);
         this.preciseTime = readBooleanOption(PRECISE_TIME, PRECISE_TIME_NAME);
+        this.agentCanBlock = readBooleanOption(AGENT_CAN_BLOCK, AGENT_CAN_BLOCK_NAME);
     }
 
     private boolean readBooleanOption(OptionKey<Boolean> key, String name) {
@@ -246,7 +248,7 @@ public final class JSContextOptions {
         options.add(OptionDescriptor.newBuilder(PARSE_ONLY, PARSE_ONLY_NAME).category(OptionCategory.USER).help(PARSE_ONLY_HELP).build());
         options.add(OptionDescriptor.newBuilder(TIME_ZONE, TIME_ZONE_NAME).category(OptionCategory.USER).help(TIME_ZONE_HELP).build());
         options.add(OptionDescriptor.newBuilder(PRECISE_TIME, PRECISE_TIME_NAME).category(OptionCategory.USER).help(PRECISE_TIME_HELP).build());
-        options.add(OptionDescriptor.newBuilder(CODE_SHARING, CODE_SHARING_NAME).category(OptionCategory.DEBUG).help(CODE_SHARING_HELP).build());
+        options.add(OptionDescriptor.newBuilder(AGENT_CAN_BLOCK, AGENT_CAN_BLOCK_NAME).category(OptionCategory.DEBUG).help(AGENT_CAN_BLOCK_HELP).build());
     }
 
     // check for options that are not on their default value.
@@ -322,6 +324,10 @@ public final class JSContextOptions {
         return v8RealmBuiltin;
     }
 
+    public boolean canAgentBlock() {
+        return agentCanBlock;
+    }
+
     public int getStackTraceLimit() {
         return stackTraceLimit;
     }
@@ -343,6 +349,7 @@ public final class JSContextOptions {
         hash = 53 * hash + (this.directByteBuffer ? 1 : 0);
         hash = 53 * hash + (this.parseOnly ? 1 : 0);
         hash = 53 * hash + (this.preciseTime ? 1 : 0);
+        hash = 53 * hash + (this.agentCanBlock ? 1 : 0);
         return hash;
     }
 
@@ -395,6 +402,9 @@ public final class JSContextOptions {
             return false;
         }
         if (this.preciseTime != other.preciseTime) {
+            return false;
+        }
+        if (this.agentCanBlock != other.agentCanBlock) {
             return false;
         }
         return Objects.equals(this.parserOptions, other.parserOptions);

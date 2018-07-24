@@ -285,8 +285,8 @@ public class JSContext implements ShapeContext {
         this.emptyShapePrototypeInObject = createEmptyShapePrototypeInObject();
         this.globalScopeShape = createGlobalScopeShape();
 
-        this.noSuchPropertyUnusedAssumption = JSTruffleOptions.NashornExtensions ? Truffle.getRuntime().createAssumption("noSuchPropertyUnusedAssumption") : null;
-        this.noSuchMethodUnusedAssumption = JSTruffleOptions.NashornExtensions ? Truffle.getRuntime().createAssumption("noSuchMethodUnusedAssumption") : null;
+        this.noSuchPropertyUnusedAssumption = Truffle.getRuntime().createAssumption("noSuchPropertyUnusedAssumption");
+        this.noSuchMethodUnusedAssumption = Truffle.getRuntime().createAssumption("noSuchMethodUnusedAssumption");
         this.arrayPrototypeNoElementsAssumption = Truffle.getRuntime().createAssumption("arrayPrototypeNoElementsAssumption");
         this.typedArrayNotDetachedAssumption = Truffle.getRuntime().createAssumption("typedArrayNotDetachedAssumption");
         this.fastArrayAssumption = Truffle.getRuntime().createAssumption("fastArrayAssumption");
@@ -322,7 +322,7 @@ public class JSContext implements ShapeContext {
         this.noChildRealmsAssumption = Truffle.getRuntime().createAssumption("no child realms");
 
         if (JSTruffleOptions.Test262Mode || JSTruffleOptions.TestV8Mode) {
-            this.setJSAgent(new DebugJSAgent(env));
+            this.setJSAgent(new DebugJSAgent(env, contextOptions.canAgentBlock()));
         }
         if (contextOptions.isV8RealmBuiltin()) {
             this.realmList = new ArrayList<>();
@@ -1195,6 +1195,10 @@ public class JSContext implements ShapeContext {
 
     public boolean isOptionPreciseTime() {
         return contextOptions.isPreciseTime();
+    }
+
+    public boolean isOptionAgentCanBlock() {
+        return contextOptions.canAgentBlock();
     }
 
     /**

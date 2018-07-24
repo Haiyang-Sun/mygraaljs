@@ -38,22 +38,42 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-package com.oracle.truffle.js.runtime.interop;
+package com.oracle.truffle.js.runtime.joni;
 
-import java.util.*;
+import com.oracle.truffle.api.CompilerDirectives;
+import com.oracle.truffle.api.dsl.Cached;
+import com.oracle.truffle.api.dsl.ImportStatic;
+import com.oracle.truffle.api.dsl.Specialization;
+import com.oracle.truffle.api.interop.*;
+import com.oracle.truffle.api.nodes.Node;
+import com.oracle.truffle.js.runtime.truffleinterop.JSInteropUtil;
 
-import com.oracle.truffle.js.runtime.JSTruffleOptions;
+@ImportStatic(JSInteropUtil.class)
+public abstract class InputCharAtNode extends Node {
 
-public final class JavaSuperAdapter {
-    private final Object adapter;
-
-    JavaSuperAdapter(Object adapter) {
-        assert JSTruffleOptions.NashornJavaInterop;
-        this.adapter = Objects.requireNonNull(adapter);
-        assert !(adapter instanceof JavaSuperAdapter);
+    public static InputCharAtNode create() {
+        return InputCharAtNodeGen.create();
     }
 
-    public Object getAdapter() {
-        return adapter;
+    public abstract char execute(Object input, int index);
+
+    @Specialization
+    public char doCharAt(String input, int index) {
+        return input.charAt(index);
+    }
+
+    @Specialization
+    public char doCharAt(TruffleObject input, int index, @Cached("createRead()") Node readNode) {
+        try {
+            Object c = ForeignAccess.sendRead(readNode, input, index);
+            if (c instanceof Character) {
+                return (char) c;
+            }
+            CompilerDirectives.transferToInterpreter();
+            throw UnsupportedTypeException.raise(new Object[]{c});
+        } catch (UnknownIdentifierException | UnsupportedMessageException e) {
+            CompilerDirectives.transferToInterpreter();
+            throw e.raise();
+        }
     }
 }
