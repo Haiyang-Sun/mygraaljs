@@ -57,6 +57,7 @@ import com.oracle.truffle.api.object.HiddenKey;
 import com.oracle.truffle.api.object.LocationModifier;
 import com.oracle.truffle.api.object.Property;
 import com.oracle.truffle.api.object.Shape;
+import com.oracle.truffle.api.profiles.BranchProfile;
 import com.oracle.truffle.js.runtime.Boundaries;
 import com.oracle.truffle.js.runtime.Errors;
 import com.oracle.truffle.js.runtime.JSContext;
@@ -85,6 +86,7 @@ public abstract class JSAbstractArray extends JSBuiltinObject {
     protected static final String ARRAY_LENGTH_NOT_WRITABLE = "array length is not writable";
     private static final String LENGTH_PROPERTY_NOT_WRITABLE = "length property not writable";
     protected static final String MAKE_SLOW_ARRAY_NEVER_PART_OF_COMPILATION_MESSAGE = "do not convert to slow array from compiled code";
+    public static final String ARRAY_PROTOTYPE_NO_ELEMENTS_INVALIDATION = "Array.prototype no element assumption";
 
     private static final HiddenKey ARRAY_ID = new HiddenKey("array");
     private static final HiddenKey ARRAY_TYPE_ID = new HiddenKey("arraytype");
@@ -574,6 +576,20 @@ public abstract class JSAbstractArray extends JSBuiltinObject {
         throw Errors.createRangeErrorInvalidArrayLength();
     }
 
+    public static long toArrayIndexOrRangeError(Number len, Number len32, BranchProfile profileError, BranchProfile profileDouble1, BranchProfile profileDouble2) {
+        double d32 = JSRuntime.doubleValue(len32, profileDouble1);
+        double d = JSRuntime.doubleValue(len, profileDouble2);
+
+        if (d32 == d) {
+            return len32.longValue();
+        }
+        if (d == 0) {
+            return 0; // also handles the -0.0
+        }
+        profileError.enter();
+        throw Errors.createRangeErrorInvalidArrayLength();
+    }
+
     @Override
     public boolean defineOwnProperty(DynamicObject thisObj, Object propertyKey, PropertyDescriptor descriptor, boolean doThrow) {
         if (propertyKey.equals(LENGTH)) {
@@ -706,9 +722,9 @@ public abstract class JSAbstractArray extends JSBuiltinObject {
         Shape oldShape = thisObj.getShape();
         thisObj.setShapeAndGrow(oldShape, oldShape.changeType(JSSlowArray.INSTANCE));
         JSContext context = JSObject.getJSContext(thisObj);
-        context.getFastArrayAssumption().invalidate();
+        context.getFastArrayAssumption().invalidate("create slow ArgumentsObject");
         if (isArrayPrototype(thisObj)) {
-            context.getArrayPrototypeNoElementsAssumption().invalidate();
+            context.getArrayPrototypeNoElementsAssumption().invalidate("Array.prototype has no elements");
         }
         return thisObj;
     }
@@ -757,7 +773,7 @@ public abstract class JSAbstractArray extends JSBuiltinObject {
     @TruffleBoundary
     @Override
     public boolean setPrototypeOf(DynamicObject thisObj, DynamicObject newPrototype) {
-        JSObject.getJSContext(thisObj).getArrayPrototypeNoElementsAssumption().invalidate();
+        JSObject.getJSContext(thisObj).getArrayPrototypeNoElementsAssumption().invalidate(JSAbstractArray.ARRAY_PROTOTYPE_NO_ELEMENTS_INVALIDATION);
         return super.setPrototypeOf(thisObj, newPrototype);
     }
 

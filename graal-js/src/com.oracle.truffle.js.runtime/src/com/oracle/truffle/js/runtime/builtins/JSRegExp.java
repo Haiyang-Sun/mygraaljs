@@ -44,7 +44,6 @@ import static com.oracle.truffle.js.runtime.builtins.JSAbstractArray.arrayGetReg
 
 import java.util.EnumSet;
 
-import com.oracle.truffle.api.CallTarget;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.api.frame.VirtualFrame;
@@ -63,7 +62,6 @@ import com.oracle.truffle.js.runtime.Errors;
 import com.oracle.truffle.js.runtime.JSArguments;
 import com.oracle.truffle.js.runtime.JSContext;
 import com.oracle.truffle.js.runtime.JSRealm;
-import com.oracle.truffle.js.runtime.JSRuntime;
 import com.oracle.truffle.js.runtime.JSTruffleOptions;
 import com.oracle.truffle.js.runtime.JavaScriptRootNode;
 import com.oracle.truffle.js.runtime.RegexCompilerInterface;
@@ -96,9 +94,10 @@ public final class JSRegExp extends JSBuiltinObject implements JSConstructorFact
     public static final String INPUT = "input";
     public static final String GROUPS = "groups";
 
+    public static final String PROTOTYPE_GETTER_NAME = PROTOTYPE_NAME + " getter";
+
     private static final HiddenKey COMPILED_REGEX_ID = new HiddenKey("compiledRegex");
     private static final Property COMPILED_REGEX_PROPERTY;
-    private static final Property LAST_INDEX_PROPERTY;
     private static final HiddenKey GROUPS_FACTORY_ID = new HiddenKey("groupsFactory");
     private static final Property GROUPS_FACTORY_PROPERTY;
 
@@ -168,9 +167,6 @@ public final class JSRegExp extends JSBuiltinObject implements JSConstructorFact
     static {
         Shape.Allocator regExpAllocator = JSShape.makeAllocator(JSObject.LAYOUT);
         COMPILED_REGEX_PROPERTY = JSObjectUtil.makeHiddenProperty(COMPILED_REGEX_ID, regExpAllocator.locationForType(TruffleObject.class, EnumSet.of(LocationModifier.NonNull)));
-        // (GR-1991): could start out as an int location.
-        LAST_INDEX_PROPERTY = JSObjectUtil.makeDataProperty(JSRegExp.LAST_INDEX, regExpAllocator.locationForType(Object.class, EnumSet.of(LocationModifier.NonNull)),
-                        JSAttributes.notConfigurableNotEnumerableWritable());
         GROUPS_FACTORY_PROPERTY = JSObjectUtil.makeHiddenProperty(GROUPS_FACTORY_ID, regExpAllocator.locationForType(DynamicObjectFactory.class));
 
         Shape.Allocator resultAllocator = JSShape.makeAllocator(JSObject.LAYOUT);
@@ -185,18 +181,13 @@ public final class JSRegExp extends JSBuiltinObject implements JSConstructorFact
         return (TruffleObject) COMPILED_REGEX_PROPERTY.get(thisObj, isJSRegExp(thisObj));
     }
 
-    public static Object getLastIndexRaw(DynamicObject thisObj) {
-        assert isJSRegExp(thisObj);
-        return LAST_INDEX_PROPERTY.get(thisObj, isJSRegExp(thisObj));
-    }
-
     public static DynamicObjectFactory getGroupsFactory(DynamicObject thisObj) {
         assert isJSRegExp(thisObj);
         return (DynamicObjectFactory) GROUPS_FACTORY_PROPERTY.get(thisObj, isJSRegExp(thisObj));
     }
 
     /**
-     * Creates a new JavaScript RegExp object.
+     * Creates a new JavaScript RegExp object (with a {@code lastIndex} of 0).
      * <p>
      * This overload incurs hitting a {@link TruffleBoundary} when having to examine the
      * {@code compiledRegex} for information about named capture groups. In order to avoid a
@@ -204,12 +195,17 @@ public final class JSRegExp extends JSBuiltinObject implements JSConstructorFact
      * consider using the {@code com.oracle.truffle.js.nodes.intl.CreateRegExpNode}.
      */
     public static DynamicObject create(JSContext ctx, TruffleObject compiledRegex) {
-        return create(ctx, compiledRegex, computeGroupsFactory(ctx, compiledRegex));
+        DynamicObject obj = create(ctx, compiledRegex, computeGroupsFactory(ctx, compiledRegex));
+        JSObjectUtil.putDataProperty(ctx, obj, LAST_INDEX, 0, JSAttributes.notConfigurableNotEnumerableWritable());
+        return obj;
     }
 
+    /**
+     * Creates a new JavaScript RegExp object <em>without</em> a {@code lastIndex} property.
+     */
     public static DynamicObject create(JSContext ctx, TruffleObject compiledRegex, DynamicObjectFactory groupsFactory) {
-        // (compiledRegex, lastIndex, groupsFactory)
-        DynamicObject regExp = JSObject.create(ctx, ctx.getRegExpFactory(), compiledRegex, 0, groupsFactory);
+        // (compiledRegex, groupsFactory)
+        DynamicObject regExp = JSObject.create(ctx, ctx.getRegExpFactory(), compiledRegex, groupsFactory);
         assert isJSRegExp(regExp);
         return regExp;
     }
@@ -273,45 +269,6 @@ public final class JSRegExp extends JSBuiltinObject implements JSConstructorFact
         return isInstance(obj, INSTANCE);
     }
 
-    private static DynamicObject createFlagsGetterFunction(JSRealm realm) {
-        JSContext context = realm.getContext();
-        CallTarget callTarget = Truffle.getRuntime().createCallTarget(new JavaScriptRootNode(context.getLanguage(), null, null) {
-
-            @Override
-            public Object execute(VirtualFrame frame) {
-                return getFlagsIntl(frame.getArguments()[0]);
-            }
-
-            @TruffleBoundary
-            private Object getFlagsIntl(Object obj) {
-                if (!JSRuntime.isObject(obj)) {
-                    throw Errors.createTypeErrorNotAnObject(obj);
-                }
-                DynamicObject re = (DynamicObject) obj;
-                StringBuilder sb = new StringBuilder(6);
-                appendFlag(re, GLOBAL, sb, 'g');
-                appendFlag(re, IGNORE_CASE, sb, 'i');
-                appendFlag(re, MULTILINE, sb, 'm');
-                if (context.getEcmaScriptVersion() >= 9) {
-                    appendFlag(re, DOT_ALL, sb, 's');
-                }
-                appendFlag(re, UNICODE, sb, 'u');
-                appendFlag(re, STICKY, sb, 'y');
-                return Boundaries.builderToString(sb);
-            }
-
-            private void appendFlag(DynamicObject re, String name, StringBuilder sb, char chr) {
-                Object value = JSObject.get(re, name);
-                if (JSRuntime.toBoolean(value)) {
-                    Boundaries.builderAppend(sb, chr);
-                }
-            }
-        });
-        DynamicObject flagsGetter = JSFunction.create(realm, JSFunctionData.createCallOnly(context, callTarget, 0, "get " + FLAGS));
-        JSObject.preventExtensions(flagsGetter);
-        return flagsGetter;
-    }
-
     @Override
     public DynamicObject createPrototype(JSRealm realm, DynamicObject ctor) {
         JSContext ctx = realm.getContext();
@@ -319,9 +276,9 @@ public final class JSRegExp extends JSBuiltinObject implements JSConstructorFact
 
         if (ctx.getEcmaScriptVersion() < 6) {
             JSObjectUtil.putHiddenProperty(prototype, COMPILED_REGEX_PROPERTY, RegexCompilerInterface.compile("", "", ctx));
-            JSObjectUtil.putDataProperty(ctx, prototype, LAST_INDEX_PROPERTY, 0);
+            JSObjectUtil.putDataProperty(ctx, prototype, LAST_INDEX, 0, JSAttributes.notConfigurableNotEnumerableWritable());
         }
-        JSObjectUtil.putConstantAccessorProperty(ctx, prototype, FLAGS, createFlagsGetterFunction(realm), Undefined.instance);
+        JSObjectUtil.putConstantAccessorProperty(ctx, prototype, FLAGS, realm.lookupFunction(PROTOTYPE_GETTER_NAME, "get " + FLAGS), Undefined.instance);
 
         putRegExpPropertyAccessor(realm, prototype, MULTILINE,
                         new CompiledRegexFlagPropertyAccessor(prototype, TRegexUtil.Props.Flags.MULTILINE, Undefined.instance));
@@ -355,7 +312,6 @@ public final class JSRegExp extends JSBuiltinObject implements JSConstructorFact
         // @formatter:off
         return JSObjectUtil.getProtoChildShape(thisObj, INSTANCE, ctx).
                         addProperty(COMPILED_REGEX_PROPERTY).
-                        addProperty(LAST_INDEX_PROPERTY).
                         addProperty(GROUPS_FACTORY_PROPERTY);
         // @formatter:on
     }
@@ -377,32 +333,33 @@ public final class JSRegExp extends JSBuiltinObject implements JSConstructorFact
 
     @Override
     public void fillConstructor(JSRealm realm, DynamicObject constructor) {
+        final JSContext context = realm.getContext();
         putConstructorSpeciesGetter(realm, constructor);
-        if (realm.getContext().isOptionRegexpStaticResult()) {
+        if (context.isOptionRegexpStaticResult()) {
             Object defaultValue = "";
 
             RegExpPropertyGetter getInput = obj -> {
-                TruffleObject result = realm.getContext().getRegexResult();
+                TruffleObject result = context.getRealm().getRegexResult();
                 return staticResultGetInput(defaultValue, result);
             };
             RegExpPropertyGetter getMultiline = obj -> {
-                TruffleObject result = realm.getContext().getRegexResult();
+                TruffleObject result = context.getRealm().getRegexResult();
                 return staticResultGetMultiline(false, result);
             };
             RegExpPropertyGetter getLastMatch = obj -> {
-                TruffleObject result = realm.getContext().getRegexResult();
+                TruffleObject result = context.getRealm().getRegexResult();
                 return staticResultGetLastMatch(defaultValue, result);
             };
             RegExpPropertyGetter getLastParen = obj -> {
-                TruffleObject result = realm.getContext().getRegexResult();
+                TruffleObject result = context.getRealm().getRegexResult();
                 return staticResultGetLastParen(defaultValue, result);
             };
             RegExpPropertyGetter getLeftContext = obj -> {
-                TruffleObject result = realm.getContext().getRegexResult();
+                TruffleObject result = context.getRealm().getRegexResult();
                 return staticResultGetLeftContext(defaultValue, result);
             };
             RegExpPropertyGetter getRightContext = obj -> {
-                TruffleObject result = realm.getContext().getRegexResult();
+                TruffleObject result = context.getRealm().getRegexResult();
                 return staticResultGetRightContext(defaultValue, result);
             };
 
@@ -530,15 +487,14 @@ public final class JSRegExp extends JSBuiltinObject implements JSConstructorFact
         DynamicObject getter = JSFunction.create(realm, JSFunctionData.createCallOnly(ctx, Truffle.getRuntime().createCallTarget(new JavaScriptRootNode(ctx.getLanguage(), null, null) {
 
             @Child TRegexUtil.TRegexResultAccessor resultAccessor = TRegexUtil.TRegexResultAccessor.create();
-            final int thisIndex = index;
 
             @Override
             public Object execute(VirtualFrame frame) {
-                TruffleObject result = realm.getContext().getRegexResult();
+                TruffleObject result = ctx.getRealm().getRegexResult();
                 if (resultAccessor.isMatch(result) && resultAccessor.groupCount(result) > index) {
-                    int start = resultAccessor.captureGroupStart(result, thisIndex);
+                    int start = resultAccessor.captureGroupStart(result, index);
                     if (start >= 0) {
-                        return Boundaries.substring(resultAccessor.input(result), start, resultAccessor.captureGroupEnd(result, thisIndex));
+                        return Boundaries.substring(resultAccessor.input(result), start, resultAccessor.captureGroupEnd(result, index));
                     }
                 }
                 return "";

@@ -395,11 +395,11 @@ public final class JavaBuiltins extends JSBuiltinsContainer.SwitchEnum<JavaBuilt
 
             Class<?> result;
             if (types.length == 1 && classOverrides == null) {
-                result = JavaAdapterFactory.getAdapterClassFor(types[0]);
+                result = getContext().getJavaAdapterClassFor(types[0]);
             } else {
                 result = JavaAdapterFactory.getAdapterClassFor(types, classOverrides);
             }
-            return env.asGuestValue(result);
+            return env.asHostSymbol(result);
         }
 
         protected static boolean isType(Object obj, TruffleLanguage.Env env) {

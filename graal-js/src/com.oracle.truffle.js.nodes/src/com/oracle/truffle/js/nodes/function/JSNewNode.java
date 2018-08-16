@@ -87,7 +87,6 @@ import com.oracle.truffle.js.runtime.interop.JavaAccess;
 import com.oracle.truffle.js.runtime.interop.JavaClass;
 import com.oracle.truffle.js.runtime.interop.JavaMethod;
 import com.oracle.truffle.js.runtime.interop.JavaPackage;
-import com.oracle.truffle.js.runtime.java.adapter.JavaAdapterFactory;
 import com.oracle.truffle.js.runtime.objects.JSObject;
 import com.oracle.truffle.js.runtime.objects.JSObjectUtil;
 import com.oracle.truffle.js.runtime.objects.Undefined;
@@ -134,8 +133,7 @@ public abstract class JSNewNode extends JavaScriptNode {
     }
 
     public static JSNewNode create(JSContext context, JavaScriptNode function, AbstractFunctionArgumentsNode arguments) {
-        JSFunctionCallNode callNew = JSFunctionCallNode.createNew();
-        return JSNewNodeGen.create(arguments, callNew, function, context);
+        return JSNewNodeGen.create(arguments, null, function, context);
     }
 
     public JavaScriptNode getTarget() {
@@ -147,7 +145,7 @@ public abstract class JSNewNode extends JavaScriptNode {
         int userArgumentCount = arguments.getCount(frame);
         Object[] args = JSArguments.createInitial(JSFunction.CONSTRUCT, target, userArgumentCount);
         args = arguments.executeFillObjectArray(frame, args, JSArguments.RUNTIME_ARGUMENT_COUNT);
-        return callNew.executeCall(args);
+        return getCallNew().executeCall(args);
     }
 
     @Specialization(guards = "isJSAdapter(target)")
@@ -205,7 +203,7 @@ public abstract class JSNewNode extends JavaScriptNode {
         }
         Object[] args = JSArguments.createInitial(target, target, arguments.getCount(frame));
         args = arguments.executeFillObjectArray(frame, args, JSArguments.RUNTIME_ARGUMENT_COUNT);
-        return callNew.executeCall(args);
+        return getCallNew().executeCall(args);
     }
 
     @TruffleBoundary
@@ -217,7 +215,7 @@ public abstract class JSNewNode extends JavaScriptNode {
     public Object doNewJavaObjectSpecialConstructor(VirtualFrame frame, JavaMethod target) {
         Object[] args = JSArguments.createInitial(target, target, arguments.getCount(frame));
         args = arguments.executeFillObjectArray(frame, args, JSArguments.RUNTIME_ARGUMENT_COUNT);
-        return callNew.executeCall(args);
+        return getCallNew().executeCall(args);
     }
 
     @Specialization(guards = {"isForeignObject(target)"})
@@ -257,8 +255,8 @@ public abstract class JSNewNode extends JavaScriptNode {
         }
         // Equivalent to Java.extend(type)
         JavaAccess.checkAccess(new Class<?>[]{type}, context);
-        Class<?> adapterClass = JavaAdapterFactory.getAdapterClassFor(type);
-        return (TruffleObject) env.asGuestValue(adapterClass);
+        Class<?> adapterClass = context.getJavaAdapterClassFor(type);
+        return (TruffleObject) env.asHostSymbol(adapterClass);
     }
 
     protected Node createNewCache() {
@@ -283,6 +281,14 @@ public abstract class JSNewNode extends JavaScriptNode {
             callNewTarget = insert(JSFunctionCallNode.createNewTarget());
         }
         return callNewTarget;
+    }
+
+    private JSFunctionCallNode getCallNew() {
+        if (callNew == null) {
+            CompilerDirectives.transferToInterpreterAndInvalidate();
+            callNew = insert(JSFunctionCallNode.createNew());
+        }
+        return callNew;
     }
 
     @Override

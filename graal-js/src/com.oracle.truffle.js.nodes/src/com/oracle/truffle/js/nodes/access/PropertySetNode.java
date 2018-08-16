@@ -50,6 +50,7 @@ import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.TruffleLanguage;
 import com.oracle.truffle.api.interop.ArityException;
 import com.oracle.truffle.api.interop.ForeignAccess;
+import com.oracle.truffle.api.interop.KeyInfo;
 import com.oracle.truffle.api.interop.Message;
 import com.oracle.truffle.api.interop.TruffleObject;
 import com.oracle.truffle.api.interop.UnknownIdentifierException;
@@ -102,6 +103,7 @@ import com.oracle.truffle.js.runtime.objects.JSObjectUtil;
 import com.oracle.truffle.js.runtime.objects.JSProperty;
 import com.oracle.truffle.js.runtime.objects.JSShape;
 import com.oracle.truffle.js.runtime.objects.Null;
+import com.oracle.truffle.js.runtime.objects.PropertyDescriptor;
 import com.oracle.truffle.js.runtime.objects.Undefined;
 import com.oracle.truffle.js.runtime.util.JSClassProfile;
 
@@ -119,7 +121,7 @@ public abstract class PropertySetNode extends PropertyCacheNode<PropertySetNode>
         if (JSTruffleOptions.PropertyCacheLimit > 0) {
             return new UninitializedPropertySetNode(key, isGlobal, context, isStrict, setOwnProperty, attributeFlags);
         } else {
-            return new GenericPropertySetNode(key, isGlobal, isStrict, setOwnProperty, context);
+            return new GenericPropertySetNode(key, isGlobal, isStrict, setOwnProperty, attributeFlags, context);
         }
     }
 
@@ -901,13 +903,16 @@ public abstract class PropertySetNode extends PropertyCacheNode<PropertySetNode>
         private final boolean isGlobal;
         private final boolean isStrict;
         private final boolean setOwnProperty;
+        private final byte attributeFlags;
         protected final JSContext context;
 
-        public TerminalPropertySetNode(Object key, boolean isGlobal, boolean isStrict, boolean setOwnProperty, JSContext context) {
+        public TerminalPropertySetNode(Object key, boolean isGlobal, boolean isStrict, boolean setOwnProperty, int attributeFlags, JSContext context) {
             super(key);
+            assert setOwnProperty ? attributeFlags == (attributeFlags & JSAttributes.ATTRIBUTES_MASK) : attributeFlags == JSAttributes.getDefault();
             this.isGlobal = isGlobal;
             this.isStrict = isStrict;
             this.setOwnProperty = setOwnProperty;
+            this.attributeFlags = (byte) attributeFlags;
             this.context = context;
         }
 
@@ -960,6 +965,11 @@ public abstract class PropertySetNode extends PropertyCacheNode<PropertySetNode>
         public JSContext getContext() {
             return context;
         }
+
+        @Override
+        protected int getAttributeFlags() {
+            return attributeFlags;
+        }
     }
 
     @NodeInfo(cost = NodeCost.MEGAMORPHIC)
@@ -973,8 +983,8 @@ public abstract class PropertySetNode extends PropertyCacheNode<PropertySetNode>
         private final ConditionProfile isForeignObject = ConditionProfile.createBinaryProfile();
         @CompilerDirectives.CompilationFinal private Converters.Converter converter;
 
-        public GenericPropertySetNode(Object key, boolean isGlobal, boolean isStrict, boolean setOwnProperty, JSContext context) {
-            super(key, isGlobal, isStrict, setOwnProperty, context);
+        public GenericPropertySetNode(Object key, boolean isGlobal, boolean isStrict, boolean setOwnProperty, int attributeFlags, JSContext context) {
+            super(key, isGlobal, isStrict, setOwnProperty, attributeFlags, context);
             this.toObjectNode = JSToObjectNode.createToObjectNoCheck(context);
         }
 
@@ -1009,6 +1019,8 @@ public abstract class PropertySetNode extends PropertyCacheNode<PropertySetNode>
                 thisJSObj.define(key, value);
             } else if (isGlobal() && isStrict() && !JSObject.hasProperty(thisJSObj, key, jsclassProfile)) {
                 globalPropertySetInStrictMode(thisObj);
+            } else if (isOwnProperty()) {
+                JSObject.defineOwnProperty(thisJSObj, key, PropertyDescriptor.createData(value, getAttributeFlags()), isStrict());
             } else {
                 JSObject.setWithReceiver(thisJSObj, key, value, receiver, isStrict(), jsclassProfile);
             }
@@ -1017,84 +1029,106 @@ public abstract class PropertySetNode extends PropertyCacheNode<PropertySetNode>
 
     public static final class ForeignPropertySetNode extends LinkedPropertySetNode {
 
-        @Child private Node foreignSet;
+        @Child private Node isNull;
+        @Child private Node keyInfo;
+        @Child private Node write;
         @Child private ExportValueNode export;
-        @Child private Node foreignSetterInvoke;
+        @Child private Node setterKeyInfo;
+        @Child private Node setterInvoke;
         private final JSContext context;
 
         public ForeignPropertySetNode(Object key, JSContext context) {
             super(key, new ForeignLanguageCheckNode());
             this.context = context;
-            this.foreignSet = Message.WRITE.createNode();
+            this.isNull = Message.IS_NULL.createNode();
+            this.keyInfo = Message.KEY_INFO.createNode();
+            this.write = Message.WRITE.createNode();
             this.export = ExportValueNode.create(context);
         }
 
         @Override
         public void setValueUncheckedInt(Object thisObj, int value, Object receiver, boolean condition) {
             TruffleObject truffleObject = (TruffleObject) thisObj;
-            try {
-                ForeignAccess.sendWrite(foreignSet, truffleObject, key, value);
-            } catch (UnknownIdentifierException e) {
-                if (context.isOptionNashornCompatibilityMode()) {
-                    tryInvokeSetter(truffleObject, value);
+            if (ForeignAccess.sendIsNull(isNull, truffleObject)) {
+                throw Errors.createTypeErrorCannotSetProperty(key, truffleObject, this);
+            }
+            if (KeyInfo.isWritable(ForeignAccess.sendKeyInfo(keyInfo, truffleObject, key))) {
+                try {
+                    ForeignAccess.sendWrite(write, truffleObject, key, value);
+                } catch (UnknownIdentifierException e) {
+                    // do nothing
+                } catch (UnsupportedTypeException | UnsupportedMessageException e) {
+                    throw Errors.createTypeErrorInteropException(truffleObject, e, Message.WRITE, this);
                 }
-                // do nothing
-            } catch (UnsupportedMessageException e) {
-                // do nothing
-            } catch (UnsupportedTypeException e) {
-                throw Errors.createTypeErrorInteropException(truffleObject, e, Message.WRITE, this);
+            } else if (context.isOptionNashornCompatibilityMode()) {
+                tryInvokeSetter(truffleObject, value);
             }
         }
 
         @Override
         public void setValueUncheckedDouble(Object thisObj, double value, Object receiver, boolean condition) {
             TruffleObject truffleObject = (TruffleObject) thisObj;
-            try {
-                ForeignAccess.sendWrite(foreignSet, truffleObject, key, value);
-            } catch (UnknownIdentifierException e) {
-                if (context.isOptionNashornCompatibilityMode()) {
-                    tryInvokeSetter(truffleObject, value);
+            if (ForeignAccess.sendIsNull(isNull, truffleObject)) {
+                throw Errors.createTypeErrorCannotSetProperty(key, truffleObject, this);
+            }
+            if (KeyInfo.isWritable(ForeignAccess.sendKeyInfo(keyInfo, truffleObject, key))) {
+                try {
+                    ForeignAccess.sendWrite(write, truffleObject, key, value);
+                } catch (UnknownIdentifierException e) {
+                    // do nothing
+                } catch (UnsupportedTypeException | UnsupportedMessageException e) {
+                    throw Errors.createTypeErrorInteropException(truffleObject, e, Message.WRITE, this);
                 }
-                // do nothing
-            } catch (UnsupportedMessageException e) {
-                // do nothing
-            } catch (UnsupportedTypeException e) {
-                throw Errors.createTypeErrorInteropException(truffleObject, e, Message.WRITE, this);
+            } else if (context.isOptionNashornCompatibilityMode()) {
+                tryInvokeSetter(truffleObject, value);
             }
         }
 
         @Override
         public void setValueUnchecked(Object thisObj, Object value, Object receiver, boolean condition) {
             TruffleObject truffleObject = (TruffleObject) thisObj;
+            if (ForeignAccess.sendIsNull(isNull, truffleObject)) {
+                throw Errors.createTypeErrorCannotSetProperty(key, truffleObject, this);
+            }
             Object boundValue = export.executeWithTarget(value, Undefined.instance);
-            try {
-                ForeignAccess.sendWrite(foreignSet, truffleObject, key, boundValue);
-            } catch (UnknownIdentifierException e) {
-                if (context.isOptionNashornCompatibilityMode()) {
-                    tryInvokeSetter((TruffleObject) thisObj, boundValue);
+            if (KeyInfo.isWritable(ForeignAccess.sendKeyInfo(keyInfo, truffleObject, key))) {
+                try {
+                    ForeignAccess.sendWrite(write, truffleObject, key, boundValue);
+                } catch (UnknownIdentifierException e) {
+                    // do nothing
+                } catch (UnsupportedTypeException | UnsupportedMessageException e) {
+                    throw Errors.createTypeErrorInteropException(truffleObject, e, Message.WRITE, this);
                 }
-                // do nothing
-            } catch (UnsupportedMessageException e) {
-                // do nothing
-            } catch (UnsupportedTypeException e) {
-                throw Errors.createTypeErrorInteropException(truffleObject, e, Message.WRITE, this);
+            } else if (context.isOptionNashornCompatibilityMode()) {
+                tryInvokeSetter(truffleObject, boundValue);
             }
         }
 
         // in nashorn-compat mode, `javaObj.xyz = a` can mean `javaObj.setXyz(a)`.
         private void tryInvokeSetter(TruffleObject thisObj, Object value) {
             assert context.isOptionNashornCompatibilityMode();
+            if (!(key instanceof String)) {
+                return;
+            }
             TruffleLanguage.Env env = context.getRealm().getEnv();
-            if (env.isHostObject(thisObj) && JSRuntime.isString(getKey())) {
-                if (foreignSetterInvoke == null) {
+            if (env.isHostObject(thisObj)) {
+                String setterKey = getAccessorKey("set");
+                if (setterKey == null) {
+                    return;
+                }
+                if (setterKeyInfo == null) {
                     CompilerDirectives.transferToInterpreterAndInvalidate();
-                    foreignSetterInvoke = insert(Message.createInvoke(1).createNode());
+                    setterKeyInfo = insert(Message.KEY_INFO.createNode());
+                }
+                if (!KeyInfo.isInvocable(ForeignAccess.sendKeyInfo(setterKeyInfo, thisObj, setterKey))) {
+                    return;
+                }
+                if (setterInvoke == null) {
+                    CompilerDirectives.transferToInterpreterAndInvalidate();
+                    setterInvoke = insert(Message.createInvoke(1).createNode());
                 }
                 try {
-                    String setterKey = getAccessorKey("set");
-                    if (setterKey != null) {
-                        ForeignAccess.sendInvoke(foreignSetterInvoke, thisObj, setterKey, new Object[]{value});
-                    }
+                    ForeignAccess.sendInvoke(setterInvoke, thisObj, setterKey, new Object[]{value});
                 } catch (UnknownIdentifierException | UnsupportedMessageException | UnsupportedTypeException | ArityException e) {
                     // silently ignore
                 }
@@ -1106,11 +1140,9 @@ public abstract class PropertySetNode extends PropertyCacheNode<PropertySetNode>
     public static final class UninitializedPropertySetNode extends TerminalPropertySetNode {
 
         private boolean propertyAssumptionCheckEnabled;
-        private final int attributeFlags;
 
         public UninitializedPropertySetNode(Object key, boolean isGlobal, JSContext context, boolean isStrict, boolean setOwnProperty, int attributeFlags) {
-            super(key, isGlobal, isStrict, setOwnProperty, context);
-            this.attributeFlags = attributeFlags;
+            super(key, isGlobal, isStrict, setOwnProperty, attributeFlags, context);
         }
 
         @Override
@@ -1126,11 +1158,6 @@ public abstract class PropertySetNode extends PropertyCacheNode<PropertySetNode>
         @Override
         protected void setPropertyAssumptionCheckEnabled(boolean value) {
             this.propertyAssumptionCheckEnabled = value;
-        }
-
-        @Override
-        protected int getAttributeFlags() {
-            return attributeFlags;
         }
     }
 
@@ -1410,7 +1437,7 @@ public abstract class PropertySetNode extends PropertyCacheNode<PropertySetNode>
 
     @Override
     protected PropertySetNode createGenericPropertyNode(JSContext context) {
-        return new GenericPropertySetNode(key, isGlobal(), isStrict(), isOwnProperty(), context);
+        return new GenericPropertySetNode(key, isGlobal(), isStrict(), isOwnProperty(), getAttributeFlags(), context);
     }
 
     protected boolean isStrict() {

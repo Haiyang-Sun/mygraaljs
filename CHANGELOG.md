@@ -3,12 +3,16 @@
 This changelog summarizes major changes between GraalVM versions of the Graal JavaScript (ECMAScript) language runtime.
 The main focus is on user-observable behavior of the engine.
 
+## Version 1.0.0 RC6
+* Serialization API of v8/Node.js implemented
+* Update version of Unicode to 11 in RegExp and Intl.
+
 ## Version 1.0.0 RC5
 * Add support for `Symbol.prototype.description`, a Stage 3 proposal.
 * Add support for `String.prototype.matchAll`, a Stage 3 proposal.
 * Implement optional catch binding proposal, targeted for ES2019.
-* removed legacy `NashornExtensions` option, use `--js.nashorn-compat` instead.
-* Nashorn compatibility mode was turned on for ScriptEngine provided by Graal JavaScript.
+* Removed legacy `NashornExtensions` option, use `--js.nashorn-compat` instead.
+* Provide Java package globals by default.
 
 ## Version 1.0.0 RC4
 * Added stack trace limit option (--js.stack-trace-limit).

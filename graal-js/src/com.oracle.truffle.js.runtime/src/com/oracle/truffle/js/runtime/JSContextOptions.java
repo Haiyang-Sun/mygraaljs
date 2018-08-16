@@ -48,6 +48,7 @@ import java.util.Objects;
 import org.graalvm.options.OptionCategory;
 import org.graalvm.options.OptionDescriptor;
 import org.graalvm.options.OptionKey;
+import org.graalvm.options.OptionValues;
 
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
@@ -55,7 +56,7 @@ import com.oracle.truffle.api.TruffleLanguage.Env;
 
 public final class JSContextOptions {
     @CompilationFinal private ParserOptions parserOptions;
-    @CompilationFinal private Env env;
+    @CompilationFinal private OptionValues optionValues;
 
     public static final String ECMASCRIPT_VERSION_NAME = JS_OPTION_PREFIX + "ecmascript-version";
     public static final OptionKey<Integer> ECMASCRIPT_VERSION = new OptionKey<>(JSTruffleOptions.MaxECMAScriptVersion);
@@ -108,9 +109,8 @@ public final class JSContextOptions {
     @CompilationFinal private boolean nashornCompatibilityMode;
 
     public static final String STACK_TRACE_LIMIT_NAME = JS_OPTION_PREFIX + "stack-trace-limit";
-    private static final OptionKey<Integer> STACK_TRACE_LIMIT = new OptionKey<>(JSTruffleOptions.StackTraceLimit);
+    public static final OptionKey<Integer> STACK_TRACE_LIMIT = new OptionKey<>(JSTruffleOptions.StackTraceLimit);
     private static final String STACK_TRACE_LIMIT_HELP = helpWithDefault("number of stack frames to capture", STACK_TRACE_LIMIT);
-    @CompilationFinal private int stackTraceLimit;
 
     public static final String DEBUG_BUILTIN_NAME = JS_OPTION_PREFIX + "debug-builtin";
     private static final OptionKey<Boolean> DEBUG_BUILTIN = new OptionKey<>(false);
@@ -141,6 +141,10 @@ public final class JSContextOptions {
     private static final String AGENT_CAN_BLOCK_HELP = helpWithDefault("Determines whether agents can block or not.", AGENT_CAN_BLOCK);
     @CompilationFinal private boolean agentCanBlock;
 
+    public static final String JAVA_PACKAGE_GLOBALS_NAME = JS_OPTION_PREFIX + "java-package-globals";
+    public static final OptionKey<Boolean> JAVA_PACKAGE_GLOBALS = new OptionKey<>(true);
+    private static final String JAVA_PACKAGE_GLOBALS_HELP = helpWithDefault("provide Java package globals: Packages, java, javafx, javax, com, org, edu.", JAVA_PACKAGE_GLOBALS);
+
     private static final OptionKey<?>[] PREINIT_CONTEXT_OPTION_KEYS = {
                     ECMASCRIPT_VERSION,
                     ANNEX_B,
@@ -148,6 +152,7 @@ public final class JSContextOptions {
                     REGEXP_STATIC_RESULT,
                     SHARED_ARRAY_BUFFER,
                     ATOMICS,
+                    DIRECT_BYTE_BUFFER,
                     V8_COMPATIBILITY_MODE,
                     V8_REALM_BUILTIN,
                     NASHORN_COMPATIBILITY_MODE,
@@ -155,6 +160,7 @@ public final class JSContextOptions {
                     DEBUG_BUILTIN,
                     PARSE_ONLY,
                     TIME_ZONE,
+                    JAVA_PACKAGE_GLOBALS,
     };
 
     public JSContextOptions(ParserOptions parserOptions) {
@@ -171,13 +177,11 @@ public final class JSContextOptions {
         this.parserOptions = parserOptions;
     }
 
-    public void setEnv(Env newEnv) {
+    public void setOptionValues(OptionValues newOptions) {
         CompilerAsserts.neverPartOfCompilation();
-        if (newEnv != null) {
-            this.env = newEnv;
-            cacheOptions();
-            parserOptions = parserOptions.putOptions(env.getOptions());
-        }
+        optionValues = newOptions;
+        cacheOptions();
+        parserOptions = parserOptions.putOptions(newOptions);
     }
 
     private void cacheOptions() {
@@ -191,7 +195,6 @@ public final class JSContextOptions {
         this.v8CompatibilityMode = readBooleanOption(V8_COMPATIBILITY_MODE, V8_COMPATIBILITY_MODE_NAME);
         this.v8RealmBuiltin = readBooleanOption(V8_REALM_BUILTIN, V8_REALM_BUILTIN_NAME);
         this.nashornCompatibilityMode = readBooleanOption(NASHORN_COMPATIBILITY_MODE, NASHORN_COMPATIBILITY_MODE_NAME);
-        this.stackTraceLimit = readIntegerOption(STACK_TRACE_LIMIT, STACK_TRACE_LIMIT_NAME);
         this.directByteBuffer = readBooleanOption(DIRECT_BYTE_BUFFER, DIRECT_BYTE_BUFFER_NAME);
         this.parseOnly = readBooleanOption(PARSE_ONLY, PARSE_ONLY_NAME);
         this.debug = readBooleanOption(DEBUG_BUILTIN, DEBUG_BUILTIN_NAME);
@@ -200,10 +203,10 @@ public final class JSContextOptions {
     }
 
     private boolean readBooleanOption(OptionKey<Boolean> key, String name) {
-        if (env == null) {
+        if (optionValues == null) {
             return readBooleanFromSystemProperty(key, name);
         } else {
-            return env.getOptions().get(key);
+            return key.getValue(optionValues);
         }
     }
 
@@ -216,10 +219,10 @@ public final class JSContextOptions {
     }
 
     private int readIntegerOption(OptionKey<Integer> key, String name) {
-        if (env == null) {
+        if (optionValues == null) {
             return readIntegerFromSystemProperty(key, name);
         } else {
-            return env.getOptions().get(key);
+            return key.getValue(optionValues);
         }
     }
 
@@ -249,13 +252,17 @@ public final class JSContextOptions {
         options.add(OptionDescriptor.newBuilder(TIME_ZONE, TIME_ZONE_NAME).category(OptionCategory.USER).help(TIME_ZONE_HELP).build());
         options.add(OptionDescriptor.newBuilder(PRECISE_TIME, PRECISE_TIME_NAME).category(OptionCategory.USER).help(PRECISE_TIME_HELP).build());
         options.add(OptionDescriptor.newBuilder(AGENT_CAN_BLOCK, AGENT_CAN_BLOCK_NAME).category(OptionCategory.DEBUG).help(AGENT_CAN_BLOCK_HELP).build());
+        options.add(OptionDescriptor.newBuilder(JAVA_PACKAGE_GLOBALS, JAVA_PACKAGE_GLOBALS_NAME).category(OptionCategory.USER).help(JAVA_PACKAGE_GLOBALS_HELP).build());
     }
 
     // check for options that are not on their default value.
     // in such case, we cannot use the pre-initialized context for faster startup
-    public static boolean optionsAllowPreInitializedContext(JSRealm realm, Env env) {
+    public static boolean optionsAllowPreInitializedContext(Env preinitEnv, Env env) {
+        if (!preinitEnv.getOptions().hasSetOptions() && !env.getOptions().hasSetOptions()) {
+            return true;
+        }
         for (OptionKey<?> key : PREINIT_CONTEXT_OPTION_KEYS) {
-            if (!realm.getEnv().getOptions().get(key).equals(env.getOptions().get(key))) {
+            if (!preinitEnv.getOptions().get(key).equals(env.getOptions().get(key))) {
                 return false;
             }
         }
@@ -328,10 +335,6 @@ public final class JSContextOptions {
         return agentCanBlock;
     }
 
-    public int getStackTraceLimit() {
-        return stackTraceLimit;
-    }
-
     @Override
     public int hashCode() {
         int hash = 5;
@@ -345,6 +348,7 @@ public final class JSContextOptions {
         hash = 53 * hash + (this.atomics ? 1 : 0);
         hash = 53 * hash + (this.v8CompatibilityMode ? 1 : 0);
         hash = 53 * hash + (this.v8RealmBuiltin ? 1 : 0);
+        hash = 53 * hash + (this.nashornCompatibilityMode ? 1 : 0);
         hash = 53 * hash + (this.debug ? 1 : 0);
         hash = 53 * hash + (this.directByteBuffer ? 1 : 0);
         hash = 53 * hash + (this.parseOnly ? 1 : 0);
@@ -390,6 +394,9 @@ public final class JSContextOptions {
             return false;
         }
         if (this.v8RealmBuiltin != other.v8RealmBuiltin) {
+            return false;
+        }
+        if (this.nashornCompatibilityMode != other.nashornCompatibilityMode) {
             return false;
         }
         if (this.debug != other.debug) {

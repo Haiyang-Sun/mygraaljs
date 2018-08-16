@@ -72,6 +72,7 @@ import com.oracle.truffle.js.builtins.DebugBuiltinsFactory.DebugClassNodeGen;
 import com.oracle.truffle.js.builtins.DebugBuiltinsFactory.DebugCompileFunctionNodeGen;
 import com.oracle.truffle.js.builtins.DebugBuiltinsFactory.DebugContinueInInterpreterNodeGen;
 import com.oracle.truffle.js.builtins.DebugBuiltinsFactory.DebugCreateLargeIntegerNodeGen;
+import com.oracle.truffle.js.builtins.DebugBuiltinsFactory.DebugCreateLazyStringNodeGen;
 import com.oracle.truffle.js.builtins.DebugBuiltinsFactory.DebugDumpCountersNodeGen;
 import com.oracle.truffle.js.builtins.DebugBuiltinsFactory.DebugDumpFunctionTreeNodeGen;
 import com.oracle.truffle.js.builtins.DebugBuiltinsFactory.DebugHeapDumpNodeGen;
@@ -121,6 +122,7 @@ import com.oracle.truffle.js.runtime.builtins.JSFunction;
 import com.oracle.truffle.js.runtime.builtins.JSGlobalObject;
 import com.oracle.truffle.js.runtime.builtins.JSProxy;
 import com.oracle.truffle.js.runtime.builtins.JSUserObject;
+import com.oracle.truffle.js.runtime.objects.JSLazyString;
 import com.oracle.truffle.js.runtime.objects.JSModuleLoader;
 import com.oracle.truffle.js.runtime.objects.JSModuleRecord;
 import com.oracle.truffle.js.runtime.objects.JSObject;
@@ -158,6 +160,7 @@ public final class DebugBuiltins extends JSBuiltinsContainer.SwitchEnum<DebugBui
         loadModule(2),
         printNodeCounters(0),
         createLargeInteger(1),
+        createLazyString(2),
         typedArrayDetachBuffer(1),
         systemGC(0),
         systemProperty(1),
@@ -248,6 +251,8 @@ public final class DebugBuiltins extends JSBuiltinsContainer.SwitchEnum<DebugBui
 
             case createLargeInteger:
                 return DebugCreateLargeIntegerNodeGen.create(context, builtin, args().fixedArgs(1).createArgumentNodes(context));
+            case createLazyString:
+                return DebugCreateLazyStringNodeGen.create(context, builtin, args().fixedArgs(2).createArgumentNodes(context));
             default:
                 if (!JSTruffleOptions.SubstrateVM) {
                     switch (builtinEnum) {
@@ -364,12 +369,11 @@ public final class DebugBuiltins extends JSBuiltinsContainer.SwitchEnum<DebugBui
         protected Object dumpFunctionTree(DynamicObject functionObj) {
             CallTarget target = JSFunction.getCallTarget(functionObj);
             if (target instanceof RootCallTarget) {
-                NodeUtil.printTree(getContext().getWriter(), ((RootCallTarget) target).getRootNode());
+                NodeUtil.printTree(getContext().getRealm().getOutputWriter(), ((RootCallTarget) target).getRootNode());
+                return Undefined.instance;
             } else {
-                getContext().getErrorWriter().println("Node tree node accessible.");
+                throw Errors.shouldNotReachHere();
             }
-
-            return Undefined.instance;
         }
     }
 
@@ -423,7 +427,7 @@ public final class DebugBuiltins extends JSBuiltinsContainer.SwitchEnum<DebugBui
         @Specialization
         protected Object inspect(@SuppressWarnings("unused") Object thisObj, DynamicObject object, Object level0) {
             int level = JSRuntime.toInt32(level0);
-            getContext().getWriter().println(((DynamicObjectImpl) object).debugDump(level));
+            getContext().getRealm().getOutputWriter().println(((DynamicObjectImpl) object).debugDump(level));
             return Undefined.instance;
         }
 
@@ -442,7 +446,7 @@ public final class DebugBuiltins extends JSBuiltinsContainer.SwitchEnum<DebugBui
         @Specialization
         protected Object printObject(DynamicObject object, Object level0) {
             int level = level0 == Undefined.instance ? 1 : JSRuntime.toInt32(level0);
-            getContext().getWriter().println(debugPrint(object, 0, level));
+            getContext().getRealm().getOutputWriter().println(debugPrint(object, 0, level));
             return Undefined.instance;
         }
 
@@ -843,6 +847,33 @@ public final class DebugBuiltins extends JSBuiltinsContainer.SwitchEnum<DebugBui
         protected LargeInteger createLargeInteger(Object a) {
             return LargeInteger.valueOf(JSRuntime.toInt32(a));
         }
+    }
+
+    public abstract static class DebugCreateLazyString extends JSBuiltinNode {
+
+        public DebugCreateLazyString(JSContext context, JSBuiltin builtin) {
+            super(context, builtin);
+        }
+
+        @Specialization
+        protected CharSequence createLazyString(String left, String right) {
+            CharSequence result = JSLazyString.create(left, right);
+            if (!(result instanceof JSLazyString)) {
+                throw Errors.createError(resultIsNotLazyStringMessage(left, right));
+            }
+            return result;
+        }
+
+        @TruffleBoundary
+        private static String resultIsNotLazyStringMessage(String left, String right) {
+            return "Concatenation of '" + left + "' and '" + right + "' does not produce JSLazyString.";
+        }
+
+        @Specialization
+        protected CharSequence createLazyString(Object left, Object right) {
+            return createLazyString(JSRuntime.toString(left), JSRuntime.toString(right));
+        }
+
     }
 
     /**

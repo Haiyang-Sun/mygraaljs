@@ -40,20 +40,20 @@
  */
 package com.oracle.truffle.js.runtime.java.adapter;
 
+import static com.oracle.truffle.js.runtime.AbstractJavaScriptLanguage.ID;
+
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.function.ToDoubleFunction;
-import java.util.function.ToIntFunction;
-import java.util.function.ToLongFunction;
 
 import org.graalvm.polyglot.Context;
+import org.graalvm.polyglot.Source;
 import org.graalvm.polyglot.Value;
 
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.js.runtime.Errors;
 import com.oracle.truffle.js.runtime.JSRuntime;
+import com.oracle.truffle.js.runtime.JSTruffleOptions;
 
 /**
  * Provides static utility services to generated Java adapter classes.
@@ -62,6 +62,7 @@ public final class JavaAdapterServices {
     private static final MethodHandle VALUE_EXECUTE_METHOD_HANDLE;
     private static final MethodHandle VALUE_EXECUTE_VOID_METHOD_HANDLE;
     private static final MethodHandle VALUE_AS_METHOD_HANDLE;
+    private static final Source HAS_OWN_PROPERTY_SOURCE = Source.newBuilder(ID, "(function(obj, name){return Object.prototype.hasOwnProperty.call(obj, name);})", "hasOwnProperty").buildLiteral();
     private static final ThreadLocal<Value> classOverrides = new ThreadLocal<>();
 
     static {
@@ -75,6 +76,7 @@ public final class JavaAdapterServices {
     }
 
     private JavaAdapterServices() {
+        assert !JSTruffleOptions.SubstrateVM;
     }
 
     /**
@@ -126,9 +128,9 @@ public final class JavaAdapterServices {
     }
 
     private static boolean hasOwnProperty(final Value obj, final String name) {
-        Value bindings = Context.getCurrent().getBindings("js");
+        Value hasOwnProperty = Context.getCurrent().eval(HAS_OWN_PROPERTY_SOURCE);
         try {
-            return bindings.getMember("Object").getMember("prototype").getMember("hasOwnProperty").getMember("call").execute(obj, name).asBoolean();
+            return hasOwnProperty.execute(obj, name).asBoolean();
         } catch (Exception e) {
             // probably due to monkey patching, ignore
             return false;
@@ -189,62 +191,6 @@ public final class JavaAdapterServices {
     }
 
     private static MethodHandle createReturnValueConverter(Class<?> returnType) {
-        MethodHandle converterHandle = returnValueConverter.get(returnType);
-        if (converterHandle != null) {
-            return converterHandle;
-        }
-
-        if (returnType == byte.class || returnType == short.class || returnType == int.class) {
-            ToIntFunction<Value> converter = value -> {
-                if (value.fitsInInt()) {
-                    return value.asInt();
-                } else if (value.fitsInLong()) {
-                    return (int) value.asLong();
-                } else if (value.fitsInDouble()) {
-                    return (int) value.asDouble();
-                }
-                return value.asInt();
-            };
-            try {
-                MethodHandle apply = MethodHandles.publicLookup().findVirtual(ToIntFunction.class, "applyAsInt", MethodType.methodType(int.class, Object.class));
-                converterHandle = apply.bindTo(converter);
-            } catch (NoSuchMethodException | IllegalAccessException e) {
-                throw new IllegalStateException(e);
-            }
-        } else if (returnType == long.class) {
-            ToLongFunction<Value> converter = value -> {
-                if (value.fitsInLong()) {
-                    return value.asLong();
-                } else if (value.fitsInDouble()) {
-                    return (long) value.asDouble();
-                }
-                return value.asLong();
-            };
-            try {
-                MethodHandle apply = MethodHandles.publicLookup().findVirtual(ToLongFunction.class, "applyAsLong", MethodType.methodType(long.class, Object.class));
-                converterHandle = apply.bindTo(converter);
-            } catch (NoSuchMethodException | IllegalAccessException e) {
-                throw new IllegalStateException(e);
-            }
-        } else if (returnType == float.class || returnType == double.class) {
-            ToDoubleFunction<Value> converter = value -> {
-                return value.asDouble();
-            };
-            try {
-                MethodHandle apply = MethodHandles.publicLookup().findVirtual(ToDoubleFunction.class, "applyAsDouble", MethodType.methodType(double.class, Object.class));
-                converterHandle = apply.bindTo(converter);
-            } catch (NoSuchMethodException | IllegalAccessException e) {
-                throw new IllegalStateException(e);
-            }
-        }
-        if (converterHandle != null) {
-            converterHandle = converterHandle.asType(converterHandle.type().changeParameterType(0, Value.class));
-            MethodHandle existing = returnValueConverter.putIfAbsent(returnType, converterHandle);
-            return existing == null ? converterHandle : existing;
-        }
-
         return MethodHandles.insertArguments(VALUE_AS_METHOD_HANDLE, 1, returnType);
     }
-
-    private static final ConcurrentHashMap<Class<?>, MethodHandle> returnValueConverter = new ConcurrentHashMap<>();
 }
