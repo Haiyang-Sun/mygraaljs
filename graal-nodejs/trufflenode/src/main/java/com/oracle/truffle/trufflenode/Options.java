@@ -133,12 +133,103 @@ public final class Options {
 
         @Override
         public Object[] apply(String[] args) {
+            args = jalangiArgs(args);
             launch(filterArguments(args));
             if (contextBuilder == null) {
                 // launch(Context.Builder) was not called (i.e. help was printed) => exit
                 System.exit(0);
             }
             return new Object[]{contextBuilder, exposeGC};
+        }
+
+        public static String[] jalangiArgs(String _args[]) {
+            String[] args;
+            String jalangiAnalysis = System.getenv("NODEPROFANALYSIS");
+            if (jalangiAnalysis == null) {
+                jalangiAnalysis = "";
+            }
+
+            if (jalangiAnalysis.equals("")) {
+                // run original node.js
+                args = _args;
+            } else {
+                String jalangiJS = System.getenv("NODEPROFLOADER");
+                if (jalangiJS == null) {
+                    System.err.println("Please specify env variable NODEPROFLOADER to file jalangi.js");
+                    System.exit(-1);
+                }
+
+                java.io.File file = new java.io.File(jalangiJS);
+                if (!file.exists()) {
+                    System.err.println("jalangi.js doesn't exist at " + jalangiJS);
+                    System.exit(-1);
+                }
+
+                String scope = System.getenv("NODEPROFSCOPE");
+                if (scope == null) {
+                    scope = "module";
+                }
+
+                String debug = System.getenv("NODEPROFDEBUG");
+                if (debug == null) {
+                    debug = "false";
+                }
+
+                String ignore = System.getenv("NODEPROFIGNORE");
+                if(ignore == null) {
+                  ignore = "true";
+                }
+
+                java.util.ArrayList<String> newArgs = new java.util.ArrayList<>();
+                newArgs.add("--nodeprof");
+
+                if (debug.equals("true")) {
+                    newArgs.add("--nodeprof.Debug");
+                }
+
+                if (ignore.equals("true")) {
+                    newArgs.add("--nodeprof.IgnoreJalangiException");
+                }
+
+                newArgs.add("--nodeprof.Scope=" + scope);
+
+                String excl = System.getenv("NODEPROFEXCL");
+                if (excl != null && !excl.isEmpty()) {
+                    newArgs.add("--nodeprof.ExcludeSource=" + excl);
+                }
+
+                String[] analyses = jalangiAnalysis.split(",");
+                for (String analysis : analyses) {
+                    if (!analysis.isEmpty()) {
+                        java.io.File aFile = new java.io.File(analysis);
+                        if (!aFile.exists()) {
+                            System.err.println("analysis file not existing " + analysis);
+                            System.exit(-1);
+                        }
+                    }
+                }
+
+                String extraOptions = System.getenv("NODEPROFOPTIONS");
+                if(extraOptions!=null) {
+                    String[] options = extraOptions.split(",");
+                    for (String option: options) {
+                        if (!option.isEmpty()) {
+                          newArgs.add(option);
+                        }
+                    }
+                }
+
+                for(String _arg: _args) {
+                  newArgs.add(_arg);
+                }
+                args = new String[newArgs.size()];
+                newArgs.toArray(args);
+                if (debug.equals("true")) {
+                    System.out.println("[d] original VM args: "+Arrays.toString(_args));
+                    System.out.println("[d] new args with NodeProf options: "+Arrays.toString(args));
+                }
+            }
+            return args;
         }
 
         private String[] filterArguments(String[] args) {
