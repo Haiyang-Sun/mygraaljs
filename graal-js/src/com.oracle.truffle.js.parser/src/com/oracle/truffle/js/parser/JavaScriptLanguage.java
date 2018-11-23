@@ -82,6 +82,8 @@ import com.oracle.truffle.js.nodes.JavaScriptNode;
 import com.oracle.truffle.js.nodes.NodeFactory;
 import com.oracle.truffle.js.nodes.ScriptNode;
 import com.oracle.truffle.js.nodes.access.ScopeFrameNode;
+import com.oracle.truffle.js.nodes.instrumentation.JSTags.AsyncRootTag;
+import com.oracle.truffle.js.nodes.instrumentation.JSTags.AwaitTag;
 import com.oracle.truffle.js.nodes.instrumentation.JSTags.BinaryExpressionTag;
 import com.oracle.truffle.js.nodes.instrumentation.JSTags.BuiltinRootTag;
 import com.oracle.truffle.js.nodes.instrumentation.JSTags.ControlFlowBlockTag;
@@ -154,6 +156,8 @@ import com.oracle.truffle.js.runtime.truffleinterop.JSInteropUtil;
                 ControlFlowRootTag.class,
                 ControlFlowBlockTag.class,
                 ControlFlowBranchTag.class,
+                AsyncRootTag.class,
+                AwaitTag.class,
                 // Other
                 InputNodeTag.class,
 })

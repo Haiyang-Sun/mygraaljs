@@ -47,6 +47,7 @@ import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
 import com.oracle.truffle.api.RootCallTarget;
 import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.api.frame.VirtualFrame;
+import com.oracle.truffle.api.instrumentation.Tag;
 import com.oracle.truffle.api.nodes.DirectCallNode;
 import com.oracle.truffle.api.nodes.NodeCost;
 import com.oracle.truffle.api.nodes.NodeInfo;
@@ -54,6 +55,7 @@ import com.oracle.truffle.api.source.SourceSection;
 import com.oracle.truffle.js.nodes.JavaScriptNode;
 import com.oracle.truffle.js.nodes.access.JSWriteFrameSlotNode;
 import com.oracle.truffle.js.nodes.function.JSFunctionCallNode;
+import com.oracle.truffle.js.nodes.instrumentation.JSTags;
 import com.oracle.truffle.js.nodes.promise.NewPromiseCapabilityNode;
 import com.oracle.truffle.js.runtime.JSArguments;
 import com.oracle.truffle.js.runtime.JSContext;
@@ -69,41 +71,85 @@ public final class AsyncFunctionBodyNode extends JavaScriptNode {
     private static final class AsyncFunctionRootNode extends JavaScriptRootNode {
 
         private final JSContext context;
-        @Child private JavaScriptNode functionBody;
+        @Child private JavaScriptNode executeBody;
         @Child private JSWriteFrameSlotNode writeAsyncResult;
         @Child private JSFunctionCallNode callResolveNode;
         @Child private JSFunctionCallNode callRejectNode;
         @Child private TryCatchNode.GetErrorObjectNode getErrorObjectNode;
 
+        class PromiseRootEcho extends JavaScriptNode {
+            @Override
+            public Object execute(VirtualFrame frame) {
+                return frame.getArguments()[1];
+            }
+
+            @Override
+            public boolean hasTag(Class<? extends Tag> tag) {
+                if (tag == JSTags.InputNodeTag.class) {
+                    return true;
+                }
+                return false;
+            }
+        }
+
+        class ExecuteBody extends JavaScriptNode {
+            @Child private JavaScriptNode echo;
+            @Child private JavaScriptNode functionBody;
+
+            public JavaScriptNode getFunctionBody() {
+                return functionBody;
+            }
+
+            ExecuteBody(JavaScriptNode functionBody, SourceSection functionSourceSection) {
+                this.echo = new PromiseRootEcho();
+                this.echo.setSourceSection(functionSourceSection);
+                this.functionBody = functionBody;
+                this.setSourceSection(functionSourceSection);
+            }
+
+            @Override
+            public Object execute(VirtualFrame frame) {
+                PromiseCapabilityRecord promiseCapability = (PromiseCapabilityRecord) this.echo.execute(frame);
+                VirtualFrame asyncFrame = JSFrameUtil.castMaterializedFrame(frame.getArguments()[0]);
+                Completion resumptionValue = (Completion) frame.getArguments()[2];
+                writeAsyncResult.executeWrite(asyncFrame, resumptionValue);
+                try {
+                    Object result = this.functionBody.execute(asyncFrame);
+                    promiseCapabilityResolve(callResolveNode, promiseCapability, result);
+                    return result;
+                } catch (YieldException e) {
+                    assert e.isAwait();
+                    // no-op: we called await, so we will resume later.
+                } catch (Throwable e) {
+                    if (shouldCatch(e)) {
+                        promiseCapabilityReject(callRejectNode, promiseCapability, getErrorObjectNode.execute(e));
+                    } else {
+                        throw e;
+                    }
+                }
+                return Undefined.instance;
+            }
+
+            @Override
+            public boolean hasTag(Class<? extends Tag> tag) {
+                if (tag == JSTags.AsyncRootTag.class) {
+                    return true;
+                }
+                return false;
+            }
+        }
+
         AsyncFunctionRootNode(JSContext context, JavaScriptNode body, JSWriteFrameSlotNode asyncResult, SourceSection functionSourceSection) {
             super(context.getLanguage(), functionSourceSection, null);
             this.context = context;
-            this.functionBody = body;
+            this.executeBody = new ExecuteBody(body, functionSourceSection);
             this.writeAsyncResult = asyncResult;
             this.callResolveNode = JSFunctionCallNode.createCall();
         }
 
         @Override
         public Object execute(VirtualFrame frame) {
-            VirtualFrame asyncFrame = JSFrameUtil.castMaterializedFrame(frame.getArguments()[0]);
-            PromiseCapabilityRecord promiseCapability = (PromiseCapabilityRecord) frame.getArguments()[1];
-            Completion resumptionValue = (Completion) frame.getArguments()[2];
-            writeAsyncResult.executeWrite(asyncFrame, resumptionValue);
-            try {
-                Object result = functionBody.execute(asyncFrame);
-                promiseCapabilityResolve(callResolveNode, promiseCapability, result);
-            } catch (YieldException e) {
-                assert e.isAwait();
-                // no-op: we called await, so we will resume later.
-            } catch (Throwable e) {
-                if (shouldCatch(e)) {
-                    promiseCapabilityReject(callRejectNode, promiseCapability, getErrorObjectNode.execute(e));
-                } else {
-                    throw e;
-                }
-            }
-            // The result is undefined for normal completion.
-            return Undefined.instance;
+            return executeBody.execute(frame);
         }
 
         private boolean shouldCatch(Throwable exception) {
@@ -122,9 +168,11 @@ public final class AsyncFunctionBodyNode extends JavaScriptNode {
     }
 
     private final JSContext context;
+
     @Child private JavaScriptNode functionBody;
     @Child private JSWriteFrameSlotNode writeAsyncContext;
     @Child private JSWriteFrameSlotNode writeAsyncResult;
+
     @Child private NewPromiseCapabilityNode newPromiseCapability;
 
     @CompilationFinal private CallTarget resumptionTarget;
@@ -133,6 +181,7 @@ public final class AsyncFunctionBodyNode extends JavaScriptNode {
     public AsyncFunctionBodyNode(JSContext context, JavaScriptNode body, JSWriteFrameSlotNode asyncContext, JSWriteFrameSlotNode asyncResult) {
         this.context = context;
         this.functionBody = body;
+
         this.writeAsyncContext = asyncContext;
         this.writeAsyncResult = asyncResult;
         this.newPromiseCapability = NewPromiseCapabilityNode.create(context);
@@ -174,7 +223,6 @@ public final class AsyncFunctionBodyNode extends JavaScriptNode {
     @Override
     public Object execute(VirtualFrame frame) {
         PromiseCapabilityRecord promiseCapability = newPromiseCapability.executeDefault();
-
         ensureAsyncCallTargetInitialized();
         asyncFunctionStart(frame, promiseCapability);
 
@@ -195,7 +243,9 @@ public final class AsyncFunctionBodyNode extends JavaScriptNode {
             return create(getContext(), cloneUninitialized(functionBody), cloneUninitialized(writeAsyncContext), cloneUninitialized(writeAsyncResult));
         } else {
             AsyncFunctionRootNode asyncFunctionRoot = (AsyncFunctionRootNode) ((RootCallTarget) resumptionTarget).getRootNode();
-            return create(getContext(), cloneUninitialized(asyncFunctionRoot.functionBody), cloneUninitialized(writeAsyncContext), cloneUninitialized(asyncFunctionRoot.writeAsyncResult));
+            return create(getContext(),
+                            cloneUninitialized(((com.oracle.truffle.js.nodes.control.AsyncFunctionBodyNode.AsyncFunctionRootNode.ExecuteBody) asyncFunctionRoot.executeBody).getFunctionBody()),
+                            cloneUninitialized(writeAsyncContext), cloneUninitialized(asyncFunctionRoot.writeAsyncResult));
         }
     }
 

@@ -44,6 +44,7 @@ import com.oracle.truffle.api.CallTarget;
 import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.api.frame.MaterializedFrame;
 import com.oracle.truffle.api.frame.VirtualFrame;
+import com.oracle.truffle.api.instrumentation.Tag;
 import com.oracle.truffle.api.object.DynamicObject;
 import com.oracle.truffle.api.object.HiddenKey;
 import com.oracle.truffle.api.profiles.ConditionProfile;
@@ -53,6 +54,7 @@ import com.oracle.truffle.js.nodes.access.PropertyGetNode;
 import com.oracle.truffle.js.nodes.access.PropertySetNode;
 import com.oracle.truffle.js.nodes.arguments.AccessIndexedArgumentNode;
 import com.oracle.truffle.js.nodes.function.JSFunctionCallNode;
+import com.oracle.truffle.js.nodes.instrumentation.JSTags;
 import com.oracle.truffle.js.nodes.promise.NewPromiseCapabilityNode;
 import com.oracle.truffle.js.nodes.promise.PerformPromiseThenNode;
 import com.oracle.truffle.js.runtime.JSArguments;
@@ -92,6 +94,7 @@ public class AwaitNode extends JavaScriptNode implements ResumableNode, SuspendN
     protected AwaitNode(JSContext context, JavaScriptNode expression, JSReadFrameSlotNode readAsyncContextNode, JSReadFrameSlotNode readAsyncResultNode) {
         this.context = context;
         this.expression = expression;
+
         this.readAsyncResultNode = readAsyncResultNode;
         this.readAsyncContextNode = readAsyncContextNode;
         this.awaitTrampolineCall = JSFunctionCallNode.createCall();
@@ -104,6 +107,17 @@ public class AwaitNode extends JavaScriptNode implements ResumableNode, SuspendN
 
         this.newPromiseCapability = NewPromiseCapabilityNode.create(context);
         this.performPromiseThenNode = PerformPromiseThenNode.create(context);
+
+        this.setSourceSection(expression.getSourceSection());
+    }
+
+    @Override
+    public boolean hasTag(Class<? extends Tag> tag) {
+        if (tag == JSTags.AwaitTag.class) {
+            return true;
+        } else {
+            return super.hasTag(tag);
+        }
     }
 
     public static AwaitNode create(JSContext context, JavaScriptNode expression, JSReadFrameSlotNode readAsyncContextNode, JSReadFrameSlotNode readAsyncResultNode) {

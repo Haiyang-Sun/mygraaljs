@@ -65,6 +65,8 @@ public class JSTags {
                     ControlFlowRootTag.class,
                     ControlFlowBlockTag.class,
                     ControlFlowBranchTag.class,
+                    AsyncRootTag.class,
+                    AwaitTag.class,
 
     };
 
@@ -445,6 +447,18 @@ public class JSTags {
     @Tag.Identifier("ControlFlowBlockTag")
     public static final class ControlFlowBlockTag extends Tag {
         private ControlFlowBlockTag() {
+        }
+    }
+
+    @Tag.Identifier("AsyncRootTag")
+    public static final class AsyncRootTag extends Tag {
+        private AsyncRootTag() {
+        }
+    }
+
+    @Tag.Identifier("AwaitTag")
+    public static final class AwaitTag extends Tag {
+        private AwaitTag() {
         }
     }
 

@@ -58,6 +58,7 @@ public final class GeneratorWrapperNode extends JavaScriptNode implements Repeat
         this.childNode = childNode;
         this.stateNode = stateNode;
         this.writeStateNode = writeStateNode;
+        this.setSourceSection(this.childNode.getSourceSection());
     }
 
     public static JavaScriptNode createWrapper(JavaScriptNode child, JavaScriptNode state, WriteNode writeStateNode) {
