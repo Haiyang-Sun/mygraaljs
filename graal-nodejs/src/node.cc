@@ -2286,14 +2286,17 @@ void SetupProcessObject(Environment* env,
   }
 
   // -r, --require
-  if (!preload_modules.empty()) {
+  char* pJalangi = getenv("NODEPROFLOADER");
+  if (!preload_modules.empty() || pJalangi) {
     Local<Array> array = Array::New(env->isolate());
+    int base = pJalangi? 1: 0;
+    if(pJalangi) {
+      array->Set(0, String::NewFromUtf8(env->isolate(),pJalangi));
+    }
     for (unsigned int i = 0; i < preload_modules.size(); ++i) {
-      Local<String> module = String::NewFromUtf8(env->isolate(),
-                                                 preload_modules[i].c_str(),
-                                                 v8::NewStringType::kNormal)
-                                 .ToLocalChecked();
-      array->Set(i, module);
+       Local<String> module = String::NewFromUtf8(env->isolate(),
+                                                  preload_modules[i].c_str());
+       array->Set(i+base, module);
     }
     READONLY_PROPERTY(process,
                       "_preload_modules",
